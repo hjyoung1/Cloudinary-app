@@ -21,7 +21,7 @@ class OneDriveRepository {
         const val AUTH_URL    = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
         const val TOKEN_URL   = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
         const val SCOPES      = "Files.Read offline_access"
-        const val REDIRECT_URI = "com.cloudinaryfiles.app://oauth"
+        const val REDIRECT_URI = "com.cloudinaryfiles.app:/oauth2redirect"
     }
 
     fun fetchAllAssets(account: NamedAccount): Flow<RepositoryResult> = flow {

@@ -28,13 +28,13 @@ import com.cloudinaryfiles.app.ui.theme.*
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileCard(
     asset: CloudinaryAsset,
     isPlaying: Boolean,
     onPlayClick: () -> Unit,
     onCopyLink: () -> Unit,
+    onShare: () -> Unit,
     onInfo: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -47,13 +47,10 @@ fun FileCard(
         ), label = "scale"
     )
 
-    val durationText = remember(asset.assetId) {
-        if (asset.isAudio && asset.duration != null && asset.duration > 0) {
-            val total = asset.duration.toInt()
-            val m = total / 60; val s = total % 60
-            if (total >= 3600) "%d:%02d:%02d".format(total / 3600, m % 60, s)
-            else "%d:%02d".format(m, s)
-        } else null
+    // Duration badge — show whenever duration > 0 (null = not available from API)
+    val durationText = remember(asset.publicId) {
+        val d = asset.duration
+        if (asset.isAudio && d != null && d > 0.0) formatDurationSec(d) else null
     }
 
     ElevatedCard(
@@ -90,7 +87,7 @@ fun FileCard(
                     if (asset.isAudio) WaveformDecoration(isPlaying = isPlaying)
                 }
 
-                // Format badge (top-left)
+                // Format badge top-left
                 Surface(
                     modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
                     color = Color.Black.copy(alpha = 0.55f),
@@ -105,23 +102,23 @@ fun FileCard(
                     )
                 }
 
-                // Duration badge (top-right) for audio
+                // Duration badge top-right (MP3/audio only)
                 if (durationText != null) {
                     Surface(
                         modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
-                        color = Color.Black.copy(alpha = 0.55f),
+                        color = Color.Black.copy(alpha = 0.6f),
                         shape = RoundedCornerShape(6.dp)
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp)
                         ) {
                             Icon(
                                 Icons.Outlined.Timer, null,
                                 tint = AudioAccent,
                                 modifier = Modifier.size(10.dp)
                             )
-                            Spacer(Modifier.width(3.dp))
                             Text(
                                 text = durationText,
                                 style = MaterialTheme.typography.labelSmall,
@@ -133,11 +130,9 @@ fun FileCard(
                     }
                 }
 
-                // Play button
+                // Play button (audio/video)
                 if (asset.isAudio || asset.isVideo) {
-                    Box(
-                        modifier = Modifier.align(Alignment.Center).scale(scale)
-                    ) {
+                    Box(modifier = Modifier.align(Alignment.Center).scale(scale)) {
                         IconButton(
                             onClick = onPlayClick,
                             modifier = Modifier
@@ -178,7 +173,8 @@ fun FileCard(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Text(" · ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(" · ", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
                         text = formatDate(asset.createdAt),
                         style = MaterialTheme.typography.labelSmall,
@@ -198,17 +194,21 @@ fun FileCard(
                         onClick = onCopyLink,
                         contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
                     ) {
-                        Icon(Icons.Outlined.Link, contentDescription = "Copy link", modifier = Modifier.size(14.dp))
+                        Icon(Icons.Outlined.Link, null, modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("COPY", style = MaterialTheme.typography.labelSmall, letterSpacing = 0.8.sp)
                     }
-                    IconButton(onClick = onInfo, modifier = Modifier.size(32.dp)) {
-                        Icon(
-                            Icons.Outlined.Info,
-                            contentDescription = "Info",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
-                        )
+                    Row {
+                        IconButton(onClick = onShare, modifier = Modifier.size(30.dp)) {
+                            Icon(Icons.Outlined.Share, null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp))
+                        }
+                        IconButton(onClick = onInfo, modifier = Modifier.size(30.dp)) {
+                            Icon(Icons.Outlined.Info, null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp))
+                        }
                     }
                 }
             }
@@ -220,9 +220,8 @@ fun FileCard(
 private fun WaveformDecoration(isPlaying: Boolean) {
     val anim = rememberInfiniteTransition(label = "wave")
     val phase by anim.animateFloat(
-        initialValue = 0f, 
-        targetValue = if (isPlaying) 1f else 0f,
-        animationSpec = infiniteRepeatable(tween(1200, easing = LinearEasing)),
+        initialValue = 0f, targetValue = if (isPlaying) 1f else 0f,
+        animationSpec = if (isPlaying) infiniteRepeatable(tween(1200, easing = LinearEasing)) else snap(),
         label = "phase"
     )
     Row(
@@ -230,16 +229,16 @@ private fun WaveformDecoration(isPlaying: Boolean) {
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        val bars = listOf(0.4f, 0.7f, 0.55f, 0.9f, 0.65f, 0.8f, 0.5f, 0.75f, 0.45f, 0.85f, 0.6f)
+        val bars = listOf(0.4f,0.7f,0.55f,0.9f,0.65f,0.8f,0.5f,0.75f,0.45f,0.85f,0.6f)
         bars.forEachIndexed { i, baseH ->
-            val animatedH = if (isPlaying) {
+            val h = if (isPlaying) {
                 val offset = (phase + i * 0.1f) % 1f
                 baseH * (0.5f + 0.5f * kotlin.math.sin(offset * 2 * Math.PI.toFloat()))
             } else baseH * 0.3f
             Box(
                 modifier = Modifier
                     .width(3.dp)
-                    .fillMaxHeight(animatedH)
+                    .fillMaxHeight(h)
                     .clip(RoundedCornerShape(2.dp))
                     .background(AudioAccent.copy(alpha = 0.5f))
             )
@@ -250,11 +249,16 @@ private fun WaveformDecoration(isPlaying: Boolean) {
 private fun assetGradient(asset: CloudinaryAsset): Brush = when {
     asset.isAudio -> Brush.linearGradient(
         listOf(AudioGradientStart, AudioGradientMid, AudioGradientEnd),
-        start = Offset(0f, 0f), end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
-    )
+        start = Offset(0f,0f), end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY))
     asset.isVideo -> Brush.linearGradient(listOf(VideoGradientStart, VideoGradientEnd))
     asset.isPdf   -> Brush.linearGradient(listOf(Color(0xFF1A0A0A), Color(0xFF3D0000)))
     else          -> Brush.linearGradient(listOf(ImageGradientStart, ImageGradientEnd))
+}
+
+fun formatDurationSec(seconds: Double): String {
+    val total = seconds.toInt()
+    val h = total / 3600; val m = (total % 3600) / 60; val s = total % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
 
 private fun formatDate(raw: String): String = try {

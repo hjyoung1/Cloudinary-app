@@ -22,7 +22,7 @@ class DropboxRepository {
     companion object {
         const val AUTH_URL    = "https://www.dropbox.com/oauth2/authorize"
         const val TOKEN_URL   = "https://api.dropboxapi.com/oauth2/token"
-        const val REDIRECT_URI = "com.cloudinaryfiles.app://oauth"
+        const val REDIRECT_URI = "com.cloudinaryfiles.app:/oauth2redirect"
         const val SCOPES      = "files.content.read files.metadata.read"
     }
 

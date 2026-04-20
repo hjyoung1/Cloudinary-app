@@ -20,7 +20,7 @@ class BoxRepository {
     companion object {
         const val AUTH_URL    = "https://account.box.com/api/oauth2/authorize"
         const val TOKEN_URL   = "https://api.box.com/oauth2/token"
-        const val REDIRECT_URI = "com.cloudinaryfiles.app://oauth"
+        const val REDIRECT_URI = "com.cloudinaryfiles.app:/oauth2redirect"
     }
 
     fun fetchAllAssets(account: NamedAccount): Flow<RepositoryResult> = flow {

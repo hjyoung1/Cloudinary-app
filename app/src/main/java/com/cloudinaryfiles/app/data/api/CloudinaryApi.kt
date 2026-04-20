@@ -15,7 +15,8 @@ interface CloudinaryApi {
         @Query("next_cursor") nextCursor: String? = null,
         @Query("type") type: String = "upload",
         @Query("tags") tags: Boolean = true,
-        @Query("context") context: Boolean = true
+        @Query("context") context: Boolean = true,
+        @Query("image_metadata") imageMetadata: Boolean = true
     ): Response<CloudinaryResponse>
 
     @GET("v1_1/{cloudName}/resources/image")
