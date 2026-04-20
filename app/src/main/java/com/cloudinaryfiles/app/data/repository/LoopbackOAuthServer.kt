@@ -66,25 +66,3 @@ class LoopbackOAuthServer {
         serverSocket = null
     }
 }
-            val html = """<html><head><style>
-                body{font-family:sans-serif;background:#0E0C1C;color:white;display:flex;
-                justify-content:center;align-items:center;height:100vh;margin:0}
-                .box{text-align:center;padding:40px;border-radius:16px;background:#1a1830}
-                h2{color:#7C4DFF;margin-bottom:8px}p{color:#888;margin:0}
-                </style></head><body><div class="box">
-                <h2>✓ Authorization Complete</h2>
-                <p>You can close this tab and return to CloudVault.</p>
-                </div></body></html>"""
-            socket.getOutputStream().write(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${html.length}\r\nConnection: close\r\n\r\n$html"
-                    .toByteArray()
-            )
-            code
-        }
-    }
-
-    fun stop() {
-        try { serverSocket?.close() } catch (_: Exception) {}
-        serverSocket = null
-    }
-}
