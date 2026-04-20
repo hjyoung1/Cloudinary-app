@@ -92,6 +92,77 @@ class GoogleDriveRepository {
         val body = FormBody.Builder()
             .add("code", code)
             .add("client_id", account.oauthClientId)
+            .add("redirect_uri", REDIRECT_URI)
+            .add("grant_type", "authorization_code")
+            .apply {
+                if (account.oauthClientSecret.isNotBlank())
+                    add("client_secret", account.oauthClientSecret)
+            }
+            .build()
+        val resp = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
+        val json = JSONObject(resp.body!!.string())
+        if (!resp.isSuccessful) throw Exception(json.optString("error_description", "Token exchange failed"))
+        return TokenResult(
+            json.getString("access_token"),
+            json.optString("refresh_token", account.oauthRefreshToken),
+            System.currentTimeMillis() / 1000 + json.optLong("expires_in", 3600)
+        )
+    }
+
+    private fun refreshToken(account: NamedAccount): String {
+        val body = FormBody.Builder()
+            .add("client_id", account.oauthClientId)
+            .add("refresh_token", account.oauthRefreshToken)
+            .add("grant_type", "refresh_token")
+            .apply {
+                if (account.oauthClientSecret.isNotBlank())
+                    add("client_secret", account.oauthClientSecret)
+            }
+            .build()
+        val resp = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
+        val json = JSONObject(resp.body!!.string())
+        return json.getString("access_token")
+    }
+
+    private fun getJson(url: String, token: String): JSONObject {
+        val req = Request.Builder().url(url).get().header("Authorization", "Bearer $token").build()
+        val resp = client.newCall(req).execute()
+        val body = resp.body!!.string()
+        if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}: ${body.take(200)}")
+        return JSONObject(body)
+    }
+
+    private fun mimeToResourceType(mime: String, ext: String) = when {
+        mime.startsWith("audio") || ext in setOf("mp3","wav","ogg","flac","aac","m4a") -> "video"
+        mime.startsWith("video") || ext in setOf("mp4","mov","avi","mkv","webm") -> "video"
+        mime.startsWith("image") -> "image"
+        else -> "raw"
+    }
+}
+            emit(RepositoryResult.Success(allAssets))
+        } catch (e: Exception) {
+            emit(RepositoryResult.Error("Google Drive: ${e.message}"))
+        }
+    }
+
+    /** Returns a valid access token, refreshing if expired */
+    fun freshToken(account: NamedAccount): String? {
+        if (account.oauthAccessToken.isBlank()) return null
+        val expiry = account.oauthTokenExpiry
+        val now = System.currentTimeMillis() / 1000
+        // Token still valid (with 60s buffer)
+        if (expiry == 0L || now < expiry - 60) return account.oauthAccessToken
+        // Need refresh
+        if (account.oauthRefreshToken.isBlank()) return account.oauthAccessToken
+        return try { refreshToken(account) } catch (_: Exception) { account.oauthAccessToken }
+    }
+
+    data class TokenResult(val accessToken: String, val refreshToken: String, val expiryEpoch: Long)
+
+    fun exchangeCodeForToken(account: NamedAccount, code: String): TokenResult {
+        val body = FormBody.Builder()
+            .add("code", code)
+            .add("client_id", account.oauthClientId)
             .add("client_secret", account.oauthClientSecret)
             .add("redirect_uri", REDIRECT_URI)
             .add("grant_type", "authorization_code")
