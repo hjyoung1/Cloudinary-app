@@ -175,8 +175,8 @@ fun SetupScreen(
 
             val authUrl = GoogleDriveRepository.buildAuthUrl(oauthClientId.trim(), port)
 
-            // BUG FIX: start accept() BEFORE opening browser to eliminate race window
-            val codeDeferred = kotlinx.coroutines.async(Dispatchers.IO) { server.waitForCode() }
+            // FIXED LINE HERE 👇 (Changed kotlinx.coroutines.async to scope.async)
+            val codeDeferred = scope.async(Dispatchers.IO) { server.waitForCode() }
 
             // Open in browser
             val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(authUrl))
