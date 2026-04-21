@@ -40,7 +40,7 @@ class GoogleDriveRepository {
     fun fetchAllAssets(account: NamedAccount): Flow<RepositoryResult> = flow {
         emit(RepositoryResult.Progress(0, "Connecting to Google Drive…"))
         try {
-            val token = freshToken(account) ?: throw Exception("Not authenticated. Please reconnect.")
+            val token = freshToken(account) ?: throw Exception("Not authenticated. Please reconnect your Google Drive account.")
             val allAssets = mutableListOf<CloudinaryAsset>()
             var pageToken: String? = null
             do {
@@ -48,7 +48,7 @@ class GoogleDriveRepository {
                     append("https://www.googleapis.com/drive/v3/files")
                     append("?q=trashed%3Dfalse")
                     append("&pageSize=1000")
-                    append("&fields=nextPageToken,files(id,name,mimeType,size,createdTime,modifiedTime,parents)")
+                    append("&fields=nextPageToken,files(id,name,mimeType,size,createdTime,modifiedTime,parents,videoMediaMetadata)")
                     if (pageToken != null) append("&pageToken=$pageToken")
                 }
                 val json = getJson(url, token)
@@ -63,6 +63,12 @@ class GoogleDriveRepository {
                     val size    = f.optLong("size", 0L)
                     val created = f.optString("createdTime")
                     val streamUrl = "https://www.googleapis.com/drive/v3/files/$id?alt=media&access_token=$token"
+
+                    // Extract duration from videoMediaMetadata if available
+                    val mediaMeta = f.optJSONObject("videoMediaMetadata")
+                    val durationMs = mediaMeta?.optLong("durationMillis", 0L) ?: 0L
+                    val durationSec = if (durationMs > 0) durationMs / 1000.0 else null
+
                     allAssets += CloudinaryAsset(
                         assetId   = "gdrive:$id",
                         publicId  = id,
@@ -73,7 +79,8 @@ class GoogleDriveRepository {
                         bytes     = size,
                         url       = streamUrl,
                         secureUrl = streamUrl,
-                        displayName = name.substringBeforeLast(".")
+                        displayName = name.substringBeforeLast("."),
+                        duration  = durationSec
                     )
                 }
                 pageToken = json.optString("nextPageToken").ifEmpty { null }
@@ -81,7 +88,15 @@ class GoogleDriveRepository {
             } while (pageToken != null)
             emit(RepositoryResult.Success(allAssets))
         } catch (e: Exception) {
-            emit(RepositoryResult.Error("Google Drive: ${e.message}"))
+            val msg = when {
+                e.message?.contains("UnknownHost", true) == true ||
+                e.message?.contains("Unable to resolve", true) == true ->
+                    "Google Drive: Can't reach server. Check your internet connection."
+                e.message?.contains("timeout", true) == true ->
+                    "Google Drive: Connection timed out. Please try again."
+                else -> "Google Drive: ${e.message}"
+            }
+            emit(RepositoryResult.Error(msg))
         }
     }
 
@@ -96,42 +111,70 @@ class GoogleDriveRepository {
 
     data class TokenResult(val accessToken: String, val refreshToken: String, val expiryEpoch: Long)
 
+    /**
+     * Exchange authorization code for tokens.
+     * client_secret is OPTIONAL for Google "Desktop app" OAuth clients (they use PKCE).
+     * We only include it in the request if the user provided one.
+     */
     fun exchangeCodeForToken(account: NamedAccount, code: String, port: Int): TokenResult {
-        val body = FormBody.Builder()
-            .add("code", code)
-            .add("client_id", account.oauthClientId)
-            .add("client_secret", account.oauthClientSecret)
-            .add("redirect_uri", "http://127.0.0.1:$port")
-            .add("grant_type", "authorization_code")
-            .build()
-        val resp = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
-        val json = JSONObject(resp.body?.use { it.string() } ?: "")
-        if (!resp.isSuccessful) throw Exception(json.optString("error_description",
-            json.optString("error", "Token exchange failed")))
-        return TokenResult(
-            json.getString("access_token"),
-            json.optString("refresh_token", account.oauthRefreshToken),
-            System.currentTimeMillis() / 1000 + json.optLong("expires_in", 3600)
-        )
+        return withRetryBlocking(maxAttempts = 3) {
+            val bodyBuilder = FormBody.Builder()
+                .add("code", code)
+                .add("client_id", account.oauthClientId)
+                .add("redirect_uri", "http://127.0.0.1:$port")
+                .add("grant_type", "authorization_code")
+
+            // Only add client_secret if the user actually provided one.
+            // Google "Desktop app" type clients do NOT require a secret.
+            if (account.oauthClientSecret.isNotBlank()) {
+                bodyBuilder.add("client_secret", account.oauthClientSecret)
+            }
+
+            val body = bodyBuilder.build()
+            val resp = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
+            val respBody = resp.body?.use { it.string() } ?: ""
+            val json = JSONObject(respBody)
+            if (!resp.isSuccessful) {
+                val errDesc = json.optString("error_description",
+                    json.optString("error", "Token exchange failed (HTTP ${resp.code})"))
+                throw Exception(errDesc)
+            }
+            TokenResult(
+                json.getString("access_token"),
+                json.optString("refresh_token", account.oauthRefreshToken),
+                System.currentTimeMillis() / 1000 + json.optLong("expires_in", 3600)
+            )
+        }
     }
 
     private fun refreshToken(account: NamedAccount): String {
-        val body = FormBody.Builder()
-            .add("client_id", account.oauthClientId)
-            .add("client_secret", account.oauthClientSecret)
-            .add("refresh_token", account.oauthRefreshToken)
-            .add("grant_type", "refresh_token")
-            .build()
-        val resp = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
-        return JSONObject(resp.body?.use { it.string() } ?: "").getString("access_token")
+        return withRetryBlocking(maxAttempts = 2) {
+            val bodyBuilder = FormBody.Builder()
+                .add("client_id", account.oauthClientId)
+                .add("refresh_token", account.oauthRefreshToken)
+                .add("grant_type", "refresh_token")
+
+            if (account.oauthClientSecret.isNotBlank()) {
+                bodyBuilder.add("client_secret", account.oauthClientSecret)
+            }
+
+            val body = bodyBuilder.build()
+            val resp = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
+            val respBody = resp.body?.use { it.string() } ?: ""
+            val json = JSONObject(respBody)
+            if (!resp.isSuccessful) throw Exception(json.optString("error_description", "Refresh failed"))
+            json.getString("access_token")
+        }
     }
 
     private fun getJson(url: String, token: String): JSONObject {
-        val req = Request.Builder().url(url).get().header("Authorization", "Bearer $token").build()
-        val resp = client.newCall(req).execute()
-        val body = resp.body?.use { it.string() } ?: ""
-        if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}: ${body.take(200)}")
-        return JSONObject(body)
+        return withRetryBlocking(maxAttempts = 3) {
+            val req = Request.Builder().url(url).get().header("Authorization", "Bearer $token").build()
+            val resp = client.newCall(req).execute()
+            val body = resp.body?.use { it.string() } ?: ""
+            if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}: ${body.take(200)}")
+            JSONObject(body)
+        }
     }
 
     private fun mimeToResourceType(mime: String, ext: String) = when {

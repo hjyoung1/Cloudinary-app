@@ -13,10 +13,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -47,10 +47,10 @@ fun FileCard(
         ), label = "scale"
     )
 
-    // Duration badge — show whenever duration > 0 (null = not available from API)
-    val durationText = remember(asset.publicId) {
+    // Duration badge — show for audio AND video when duration is available
+    val durationText = remember(asset.publicId, asset.duration) {
         val d = asset.duration
-        if (asset.isAudio && d != null && d > 0.0) formatDurationSec(d) else null
+        if ((asset.isAudio || asset.isVideo) && d != null && d > 0.0) formatDurationSec(d) else null
     }
 
     ElevatedCard(
@@ -102,7 +102,7 @@ fun FileCard(
                     )
                 }
 
-                // Duration badge top-right (MP3/audio only)
+                // Duration badge top-right (audio AND video)
                 if (durationText != null) {
                     Surface(
                         modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
@@ -116,7 +116,7 @@ fun FileCard(
                         ) {
                             Icon(
                                 Icons.Outlined.Timer, null,
-                                tint = AudioAccent,
+                                tint = if (asset.isAudio) AudioAccent else Color(0xFF81D4FA),
                                 modifier = Modifier.size(10.dp)
                             )
                             Text(
@@ -130,9 +130,11 @@ fun FileCard(
                     }
                 }
 
-                // Play button (audio/video)
+                // Play button (audio/video) — use graphicsLayer to avoid recomposition
                 if (asset.isAudio || asset.isVideo) {
-                    Box(modifier = Modifier.align(Alignment.Center).scale(scale)) {
+                    Box(modifier = Modifier.align(Alignment.Center).graphicsLayer {
+                        scaleX = scale; scaleY = scale
+                    }) {
                         IconButton(
                             onClick = onPlayClick,
                             modifier = Modifier
@@ -173,6 +175,17 @@ fun FileCard(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    // Show inline duration for audio in the subtitle row too
+                    if (durationText != null) {
+                        Text(" · ", style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            text = durationText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (asset.isAudio) AudioAccent else MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                     Text(" · ", style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(

@@ -29,7 +29,7 @@ class DropboxRepository {
     fun fetchAllAssets(account: NamedAccount): Flow<RepositoryResult> = flow {
         emit(RepositoryResult.Progress(0, "Connecting to Dropbox…"))
         try {
-            val token = freshToken(account) ?: throw Exception("No access token. Please reconnect.")
+            val token = freshToken(account) ?: throw Exception("No access token. Please reconnect your Dropbox account.")
             val allAssets = mutableListOf<CloudinaryAsset>()
             var hasMore = true
             var cursor: String? = null
@@ -42,12 +42,16 @@ class DropboxRepository {
                     "https://api.dropboxapi.com/2/files/list_folder/continue" to
                         """{"cursor":"$cursor"}"""
 
-                val body = bodyStr.toRequestBody("application/json".toMediaType())
-                val req = Request.Builder().url(url).post(body)
-                    .header("Authorization", "Bearer $token").build()
-                val resp = client.newCall(req).execute()
-                val json = JSONObject(resp.body?.use { it.string() } ?: "")
-                if (!resp.isSuccessful) throw Exception(json.optString("error_summary", "API error"))
+                val json = withRetryBlocking(maxAttempts = 3) {
+                    val body = bodyStr.toRequestBody("application/json".toMediaType())
+                    val req = Request.Builder().url(url).post(body)
+                        .header("Authorization", "Bearer $token").build()
+                    val resp = client.newCall(req).execute()
+                    val respBody = resp.body?.use { it.string() } ?: ""
+                    val j = JSONObject(respBody)
+                    if (!resp.isSuccessful) throw Exception(j.optString("error_summary", "API error (HTTP ${resp.code})"))
+                    j
+                }
 
                 val entries = json.getJSONArray("entries")
                 for (i in 0 until entries.length()) {
@@ -60,15 +64,25 @@ class DropboxRepository {
                     val modified = entry.optString("server_modified")
 
                     // Get a 4-hour temporary direct link (no auth needed for streaming)
-                    val tmpLinkBody = """{"path":"$path"}""".toRequestBody("application/json".toMediaType())
-                    val tmpReq = Request.Builder()
-                        .url("https://api.dropboxapi.com/2/files/get_temporary_link")
-                        .post(tmpLinkBody)
-                        .header("Authorization", "Bearer $token")
-                        .build()
-                    val tmpResp = client.newCall(tmpReq).execute()
-                    val tmpJson = JSONObject(tmpResp.body?.use { it.string() } ?: "")
-                    val streamUrl = tmpJson.optString("link", "")
+                    val streamUrl = try {
+                        withRetryBlocking(maxAttempts = 2) {
+                            val tmpLinkBody = """{"path":"$path"}""".toRequestBody("application/json".toMediaType())
+                            val tmpReq = Request.Builder()
+                                .url("https://api.dropboxapi.com/2/files/get_temporary_link")
+                                .post(tmpLinkBody)
+                                .header("Authorization", "Bearer $token")
+                                .build()
+                            val tmpResp = client.newCall(tmpReq).execute()
+                            val tmpJson = JSONObject(tmpResp.body?.use { it.string() } ?: "")
+                            tmpJson.optString("link", "")
+                        }
+                    } catch (_: Exception) { "" }
+
+                    // Extract media info duration if available
+                    val mediaMeta = entry.optJSONObject("media_info")
+                        ?.optJSONObject("metadata")
+                    val durationMs = mediaMeta?.optLong("duration", 0L) ?: 0L
+                    val durationSec = if (durationMs > 0) durationMs / 1000.0 else null
 
                     allAssets += CloudinaryAsset(
                         assetId   = "dropbox:$path",
@@ -80,7 +94,8 @@ class DropboxRepository {
                         bytes     = size,
                         url       = streamUrl,
                         secureUrl = streamUrl,
-                        displayName = name.substringBeforeLast(".")
+                        displayName = name.substringBeforeLast("."),
+                        duration  = durationSec
                     )
                 }
 
@@ -90,7 +105,15 @@ class DropboxRepository {
             }
             emit(RepositoryResult.Success(allAssets))
         } catch (e: Exception) {
-            emit(RepositoryResult.Error("Dropbox: ${e.message}"))
+            val msg = when {
+                e.message?.contains("UnknownHost", true) == true ||
+                e.message?.contains("Unable to resolve", true) == true ->
+                    "Dropbox: Can't reach server. Check your internet connection and try again."
+                e.message?.contains("timeout", true) == true ->
+                    "Dropbox: Connection timed out. Try again when you have a stronger signal."
+                else -> "Dropbox: ${e.message}"
+            }
+            emit(RepositoryResult.Error(msg))
         }
     }
 
@@ -106,32 +129,49 @@ class DropboxRepository {
     data class TokenResult(val accessToken: String, val refreshToken: String, val expiryEpoch: Long)
 
     fun exchangeCodeForToken(account: NamedAccount, code: String, port: Int): TokenResult {
-        val body = FormBody.Builder()
-            .add("code", code)
-            .add("client_id", account.oauthClientId)
-            .add("client_secret", account.oauthClientSecret)
-            .add("redirect_uri", "http://127.0.0.1:$port")
-            .add("grant_type", "authorization_code")
-            .build()
-        val resp = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
-        val json = JSONObject(resp.body?.use { it.string() } ?: "")
-        if (!resp.isSuccessful) throw Exception(json.optString("error_description", "Token exchange failed"))
-        return TokenResult(
-            json.getString("access_token"),
-            json.optString("refresh_token", ""),
-            System.currentTimeMillis() / 1000 + json.optLong("expires_in", 14400)
-        )
+        return withRetryBlocking(maxAttempts = 3) {
+            val bodyBuilder = FormBody.Builder()
+                .add("code", code)
+                .add("client_id", account.oauthClientId)
+                .add("redirect_uri", "http://127.0.0.1:$port")
+                .add("grant_type", "authorization_code")
+
+            if (account.oauthClientSecret.isNotBlank()) {
+                bodyBuilder.add("client_secret", account.oauthClientSecret)
+            }
+
+            val body = bodyBuilder.build()
+            val resp = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
+            val respBody = resp.body?.use { it.string() } ?: ""
+            val json = JSONObject(respBody)
+            if (!resp.isSuccessful) throw Exception(json.optString("error_description",
+                "Token exchange failed (HTTP ${resp.code})"))
+            TokenResult(
+                json.getString("access_token"),
+                json.optString("refresh_token", ""),
+                System.currentTimeMillis() / 1000 + json.optLong("expires_in", 14400)
+            )
+        }
     }
 
     private fun refreshToken(account: NamedAccount): String {
-        val body = FormBody.Builder()
-            .add("client_id", account.oauthClientId)
-            .add("client_secret", account.oauthClientSecret)
-            .add("refresh_token", account.oauthRefreshToken)
-            .add("grant_type", "refresh_token")
-            .build()
-        val resp = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
-        return JSONObject(resp.body?.use { it.string() } ?: "").getString("access_token")
+        return withRetryBlocking(maxAttempts = 2) {
+            val bodyBuilder = FormBody.Builder()
+                .add("client_id", account.oauthClientId)
+                .add("refresh_token", account.oauthRefreshToken)
+                .add("grant_type", "refresh_token")
+
+            if (account.oauthClientSecret.isNotBlank()) {
+                bodyBuilder.add("client_secret", account.oauthClientSecret)
+            }
+
+            val body = bodyBuilder.build()
+            val resp = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
+            val respBody = resp.body?.use { it.string() } ?: ""
+            val json = JSONObject(respBody)
+            if (!resp.isSuccessful) throw Exception(json.optString("error_description", "Refresh failed"))
+            json.getString("access_token")
+        }
     }
 
     private fun extensionToResourceType(ext: String) = when {

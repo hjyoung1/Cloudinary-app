@@ -1,12 +1,15 @@
 package com.cloudinaryfiles.app.ui.screens
 
 import android.content.Intent
+import android.net.Uri
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
@@ -18,11 +21,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -528,61 +533,284 @@ private fun FilteredEmptyView(onClearFilters: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AssetInfoDialog(asset: CloudinaryAsset, onDismiss: () -> Unit) {
-    AlertDialog(
+    val context = LocalContext.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(24.dp),
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(12.dp)) {
-                    Icon(Icons.Outlined.Info, null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(8.dp).size(20.dp))
-                }
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text("File Info", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text(asset.fileTypeLabel, style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary)
-                }
-            }
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
-                InfoRow("Name", asset.displayTitle, Icons.Outlined.Label)
-                InfoRow("Format", asset.format.uppercase(), Icons.Outlined.FileOpen)
-                InfoRow("Size", asset.formattedSize, Icons.Outlined.DataUsage)
-                if (asset.duration != null && asset.duration > 0)
-                    InfoRow("Duration", formatDurationSec(asset.duration), Icons.Outlined.Timer)
-                InfoRow("Uploaded", formatFullDate(asset.createdAt), Icons.Outlined.CalendarToday)
-                InfoRow("Public ID", asset.publicId, Icons.Outlined.Key)
-                if (asset.folder != null) InfoRow("Folder", asset.folder, Icons.Outlined.Folder)
-                if (asset.width != null && asset.height != null)
-                    InfoRow("Dimensions", "${asset.width} × ${asset.height}", Icons.Outlined.AspectRatio)
-                if (asset.tags.isNotEmpty()) InfoRow("Tags", asset.tags.joinToString(", "), Icons.Outlined.Tag)
-            }
-        },
-        confirmButton = {
-            FilledTonalButton(onClick = onDismiss, shape = RoundedCornerShape(12.dp)) { Text("Close") }
+        sheetState = sheetState,
+        containerColor = Color(0xFF12101E),
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        tonalElevation = 0.dp,
+        dragHandle = {
+            Box(
+                Modifier
+                    .padding(top = 10.dp, bottom = 4.dp)
+                    .size(width = 36.dp, height = 4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Color.White.copy(0.2f))
+            )
         }
-    )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 32.dp)
+        ) {
+            // ── Gradient Header ──────────────────────────────────────────
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(110.dp)
+                    .background(
+                        Brush.linearGradient(
+                            colors = when {
+                                asset.isAudio -> listOf(AudioGradientStart, AudioGradientEnd)
+                                asset.isVideo -> listOf(VideoGradientStart, VideoGradientEnd)
+                                asset.isImage -> listOf(ImageGradientStart, ImageGradientEnd)
+                                else -> listOf(Color(0xFF1A1050), Color(0xFF0D0D1A))
+                            },
+                            start = Offset(0f, 0f),
+                            end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
+                        )
+                    ),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 24.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        color = Color.White.copy(0.15f),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Box(Modifier.padding(14.dp)) {
+                            Icon(
+                                when {
+                                    asset.isAudio -> Icons.Filled.MusicNote
+                                    asset.isVideo -> Icons.Filled.Videocam
+                                    asset.isImage -> Icons.Filled.Image
+                                    asset.isPdf -> Icons.Filled.PictureAsPdf
+                                    else -> Icons.Filled.InsertDriveFile
+                                },
+                                null, tint = Color.White, modifier = Modifier.size(28.dp)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            asset.displayTitle,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                color = Color.White.copy(0.2f),
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    asset.format.uppercase(),
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.sp
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                asset.fileTypeLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(0.7f)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // ── Quick Stats Row ──────────────────────────────────────────
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                InfoStatCard(
+                    icon = Icons.Outlined.DataUsage,
+                    label = "Size",
+                    value = asset.formattedSize,
+                    modifier = Modifier.weight(1f)
+                )
+                if (asset.duration != null && asset.duration > 0) {
+                    InfoStatCard(
+                        icon = Icons.Outlined.Timer,
+                        label = "Duration",
+                        value = formatDurationSec(asset.duration),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                if (asset.width != null && asset.height != null) {
+                    InfoStatCard(
+                        icon = Icons.Outlined.AspectRatio,
+                        label = "Dimensions",
+                        value = "${asset.width}×${asset.height}",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // ── Details Card ─────────────────────────────────────────────
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White.copy(0.06f))
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        "Details",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    InfoDetailRow("File Name", asset.fileName, Icons.Outlined.Label)
+                    InfoDetailRow("Uploaded", formatFullDate(asset.createdAt), Icons.Outlined.CalendarToday)
+                    InfoDetailRow("Public ID", asset.publicId, Icons.Outlined.Key)
+                    if (asset.folder != null) InfoDetailRow("Folder", asset.folder, Icons.Outlined.Folder)
+                    if (asset.type.isNotBlank()) InfoDetailRow("Type", asset.type, Icons.Outlined.Category)
+                }
+            }
+
+            // ── Tags ─────────────────────────────────────────────────────
+            if (asset.tags.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White.copy(0.06f))
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(
+                            "Tags",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        @OptIn(ExperimentalLayoutApi::class)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            asset.tags.forEach { tag ->
+                                SuggestionChip(
+                                    onClick = {},
+                                    label = { Text(tag, fontSize = 11.sp) },
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.padding(bottom = 4.dp),
+                                    colors = SuggestionChipDefaults.suggestionChipColors(
+                                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(0.3f),
+                                        labelColor = MaterialTheme.colorScheme.primary
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // ── Action Buttons ───────────────────────────────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+                        cm?.setPrimaryClip(android.content.ClipData.newPlainText("URL", asset.secureUrl))
+                    },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Outlined.Link, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Copy URL", fontSize = 12.sp)
+                }
+                FilledTonalButton(
+                    onClick = {
+                        try {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(asset.secureUrl))
+                            context.startActivity(intent)
+                        } catch (_: Exception) {}
+                    },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Outlined.OpenInBrowser, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Open", fontSize = 12.sp)
+                }
+            }
+        }
+    }
 }
 
 @Composable
-private fun InfoRow(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector) {
-    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-            Text(value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+private fun InfoStatCard(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(14.dp),
+        color = Color.White.copy(0.06f)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.height(6.dp))
+            Text(value, style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1)
+            Text(label, style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(0.5f))
         }
     }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(0.2f), modifier = Modifier.padding(start = 26.dp))
+}
+
+@Composable
+private fun InfoDetailRow(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Icon(icon, null, tint = MaterialTheme.colorScheme.primary.copy(0.7f), modifier = Modifier.size(15.dp).padding(top = 2.dp))
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary.copy(0.8f), fontSize = 10.sp)
+            Text(value, style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(0.85f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
 }
 
 private fun formatFullDate(raw: String): String = try {
     OffsetDateTime.parse(raw, DateTimeFormatter.ISO_OFFSET_DATE_TIME)
         .format(DateTimeFormatter.ofPattern("MMM d, yyyy  HH:mm"))
 } catch (_: Exception) { raw }
+
