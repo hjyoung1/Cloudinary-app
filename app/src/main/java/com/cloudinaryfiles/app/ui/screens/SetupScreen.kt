@@ -801,6 +801,8 @@ private fun ErrorBanner(error: String?) {
     }
 }
 
+private fun encode(value: String): String = java.net.URLEncoder.encode(value, "UTF-8")
+
 @Composable
 private fun ConnectButton(text: String, isLoading: Boolean, loadingMsg: String, onClick: () -> Unit) {
     Button(
