@@ -28,14 +28,18 @@ import com.cloudinaryfiles.app.ui.theme.*
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun FileCard(
     asset: CloudinaryAsset,
     isPlaying: Boolean,
+    isSelected: Boolean = false,
     onPlayClick: () -> Unit,
     onCopyLink: () -> Unit,
     onShare: () -> Unit,
     onInfo: () -> Unit,
+    onLongPress: () -> Unit = {},
+    onClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val pulseAnim = rememberInfiniteTransition(label = "pulse")
@@ -66,7 +70,15 @@ fun FileCard(
                 MaterialTheme.colorScheme.surfaceVariant
         )
     ) {
-        Column {
+        Box(modifier = Modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(20.dp))
+            .androidx.compose.foundation.combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongPress
+            )
+        ) {
+            Column {
             // ── Thumbnail area ──────────────────────────────────────────────
             Box(
                 modifier = Modifier
@@ -223,6 +235,25 @@ fun FileCard(
                                 modifier = Modifier.size(16.dp))
                         }
                     }
+                }
+            }
+
+            // Selection Overlay
+            if (isSelected) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.CheckCircle,
+                        contentDescription = "Selected",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
+                            .size(24.dp)
+                    )
                 }
             }
         }

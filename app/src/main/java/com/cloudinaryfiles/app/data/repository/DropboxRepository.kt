@@ -128,7 +128,7 @@ class DropboxRepository {
 
     data class TokenResult(val accessToken: String, val refreshToken: String, val expiryEpoch: Long)
 
-    fun exchangeCodeForToken(account: NamedAccount, code: String, port: Int): TokenResult {
+    fun exchangeCodeForToken(account: NamedAccount, code: String, port: Int, pkceVerifier: String? = null): TokenResult {
         return withRetryBlocking(maxAttempts = 3) {
             val bodyBuilder = FormBody.Builder()
                 .add("code", code)
@@ -136,7 +136,9 @@ class DropboxRepository {
                 .add("redirect_uri", "http://127.0.0.1:$port")
                 .add("grant_type", "authorization_code")
 
-            if (account.oauthClientSecret.isNotBlank()) {
+            if (pkceVerifier != null) {
+                bodyBuilder.add("code_verifier", pkceVerifier)
+            } else if (account.oauthClientSecret.isNotBlank()) {
                 bodyBuilder.add("client_secret", account.oauthClientSecret)
             }
 
@@ -179,5 +181,21 @@ class DropboxRepository {
         ext in setOf("mp4","mov","avi","mkv","webm") -> "video"
         ext in setOf("jpg","jpeg","png","gif","webp","avif") -> "image"
         else -> "raw"
+    }
+
+    fun deleteFile(account: NamedAccount, path: String): Boolean {
+        return try {
+            val token = freshToken(account) ?: return false
+            val body = JSONObject().put("path", if (path.startsWith("/")) path else "/$path").toString()
+            val req = Request.Builder()
+                .url("https://api.dropboxapi.com/2/files/delete_v2")
+                .post(RequestBody.create(MediaType.parse("application/json"), body))
+                .header("Authorization", "Bearer $token")
+                .build()
+            val resp = client.newCall(req).execute()
+            resp.isSuccessful
+        } catch (e: Exception) {
+            false
+        }
     }
 }

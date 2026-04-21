@@ -4,6 +4,9 @@ import android.app.Application
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.Uri
+import android.os.Environment
+import android.app.DownloadManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
@@ -39,7 +42,10 @@ data class FilesUiState(
     val totalLoaded: Int = 0,
     val accounts: List<NamedAccount> = emptyList(),
     val activeAccountId: String? = null,
-    val activeAccount: NamedAccount? = null
+    val activeAccount: NamedAccount? = null,
+    val selectedAssets: Set<String> = emptySet(),
+    val isSelectionMode: Boolean = false,
+    val isGridView: Boolean = true
 )
 
 class FilesViewModel(application: Application) : AndroidViewModel(application) {
@@ -280,6 +286,113 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
             SortBy.SIZE_SMALLEST -> list.sortedBy { it.bytes }
         }
         _state.update { it.copy(filteredAssets = list) }
+    }
+
+    // ─── Selection & View ───────────────────────────────────────────────────
+
+    fun toggleSelectionMode() {
+        _state.update {
+            val newMode = !it.isSelectionMode
+            it.copy(isSelectionMode = newMode, selectedAssets = if (!newMode) emptySet() else it.selectedAssets)
+        }
+    }
+
+    fun toggleSelection(assetId: String) {
+        _state.update {
+            val current = it.selectedAssets.toMutableSet()
+            if (current.contains(assetId)) current.remove(assetId) else current.add(assetId)
+            it.copy(selectedAssets = current)
+        }
+    }
+
+    fun selectAll() {
+        _state.update { it.copy(selectedAssets = it.filteredAssets.map { a -> a.assetId }.toSet()) }
+    }
+
+    fun clearSelection() {
+        _state.update { it.copy(selectedAssets = emptySet(), isSelectionMode = false) }
+    }
+
+    fun toggleGridView() {
+        _state.update { it.copy(isGridView = !it.isGridView) }
+    }
+
+    fun deleteSelectedAssets() {
+        val st = _state.value
+        val account = st.activeAccount ?: return
+        val selectedIds = st.selectedAssets
+        if (selectedIds.isEmpty()) return
+        val assetsToDelete = st.allAssets.filter { it.assetId in selectedIds }
+
+        viewModelScope.launch {
+            _state.update { it.copy(isLoading = true, loadingMessage = "Deleting ${assetsToDelete.size} items…") }
+            val provider = Providers.find(account.providerKey)
+            var successCount = 0
+            
+            withContext(Dispatchers.IO) {
+                when (provider.authType) {
+                    ProviderAuthType.CLOUDINARY -> {
+                        val creds = account.toCredentials()
+                        if (creds != null && cloudRepo.deleteAssets(creds, assetsToDelete)) {
+                            successCount = assetsToDelete.size
+                        }
+                    }
+                    ProviderAuthType.OAUTH_GOOGLE -> {
+                        for (a in assetsToDelete) {
+                            if (gDriveRepo.deleteFile(account, a.publicId)) successCount++
+                        }
+                    }
+                    ProviderAuthType.OAUTH_DROPBOX -> {
+                        for (a in assetsToDelete) {
+                            if (dropboxRepo.deleteFile(account, a.publicId)) successCount++
+                        }
+                    }
+                    else -> {} // Note: Not implemented for other providers yet
+                }
+            }
+
+            if (successCount > 0) {
+                _state.update { it.copy(snackbarMessage = "Deleted $successCount items") }
+                loadAssets(account, isRefresh = true)
+            } else {
+                _state.update { it.copy(isLoading = false, error = "Failed to delete items") }
+            }
+            clearSelection()
+        }
+    }
+
+    fun downloadSelectedAssets() {
+        val st = _state.value
+        val account = st.activeAccount ?: return
+        val selectedIds = st.selectedAssets
+        if (selectedIds.isEmpty()) return
+        val assetsToDownload = st.allAssets.filter { it.assetId in selectedIds }
+
+        viewModelScope.launch {
+            _state.update { it.copy(snackbarMessage = "Starting download for ${assetsToDownload.size} items…") }
+            val dm = getApplication<Application>().getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+
+            withContext(Dispatchers.IO) {
+                for (asset in assetsToDownload) {
+                    try {
+                        val url = resolveStreamUrl(asset, account)
+                        val req = DownloadManager.Request(Uri.parse(url))
+                            .setTitle(asset.fileName)
+                            .setDescription("Downloading from CloudVault")
+                            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                            .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "CloudVault/${asset.fileName}")
+                            
+                        // Allow media scanner to see it
+                        req.allowScanningByMediaScanner()
+                        
+                        dm.enqueue(req)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
+            clearSelection()
+        }
     }
 
     override fun onCleared() { super.onCleared(); player?.release(); player = null }

@@ -38,6 +38,7 @@ import com.cloudinaryfiles.app.data.repository.DropboxRepository
 import com.cloudinaryfiles.app.data.repository.GoogleDriveRepository
 import com.cloudinaryfiles.app.data.repository.LoopbackOAuthServer
 import com.cloudinaryfiles.app.data.repository.OneDriveRepository
+import com.cloudinaryfiles.app.data.repository.PkceUtil
 import com.cloudinaryfiles.app.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -139,6 +140,7 @@ fun SetupScreen(
     // Google Drive loopback flow
     fun startGoogleOAuth() {
         if (oauthClientId.isBlank()) { error = "Client ID is required"; return }
+        if (oauthClientSecret.isBlank()) { error = "Client Secret is required. Copy it from Google Cloud Console."; return }
         isLoading = true; loadingMsg = "Starting authorization…"; error = null
         scope.launch {
             val accId  = editAccountId ?: "acct_${UUID.randomUUID()}"
@@ -234,13 +236,18 @@ fun SetupScreen(
                 oauthClientId = oauthClientId.trim(), oauthClientSecret = oauthClientSecret.trim()
             )
 
+            var pkceVerifier: String? = null
             val authUrl = when (p.authType) {
                 ProviderAuthType.OAUTH_DROPBOX -> buildString {
+                    pkceVerifier = PkceUtil.generateCodeVerifier()
+                    val pkceChallenge = PkceUtil.generateCodeChallenge(pkceVerifier!!)
                     append(DropboxRepository.AUTH_URL)
                     append("?client_id=${encode(oauthClientId.trim())}")
                     append("&redirect_uri=${encode("http://127.0.0.1:$port")}")
                     append("&response_type=code")
                     append("&token_access_type=offline")
+                    append("&code_challenge=$pkceChallenge")
+                    append("&code_challenge_method=S256")
                 }
                 ProviderAuthType.OAUTH_ONEDRIVE -> buildString {
                     append(OneDriveRepository.AUTH_URL)
@@ -272,7 +279,7 @@ fun SetupScreen(
                 loadingMsg = "Exchanging tokens…"
                 val result = withContext(Dispatchers.IO) {
                     when (p.authType) {
-                        ProviderAuthType.OAUTH_DROPBOX  -> { val r = DropboxRepository().exchangeCodeForToken(stashedAccount, code, port); Triple(r.accessToken, r.refreshToken, r.expiryEpoch) }
+                        ProviderAuthType.OAUTH_DROPBOX  -> { val r = DropboxRepository().exchangeCodeForToken(stashedAccount, code, port, pkceVerifier); Triple(r.accessToken, r.refreshToken, r.expiryEpoch) }
                         ProviderAuthType.OAUTH_ONEDRIVE -> { val r = OneDriveRepository().exchangeCodeForToken(stashedAccount, code, port); Triple(r.accessToken, r.refreshToken, r.expiryEpoch) }
                         ProviderAuthType.OAUTH_BOX      -> { val r = BoxRepository().exchangeCodeForToken(stashedAccount, code, port);      Triple(r.accessToken, r.refreshToken, r.expiryEpoch) }
                         else -> throw Exception("Unknown provider")

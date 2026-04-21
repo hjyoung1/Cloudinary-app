@@ -37,6 +37,7 @@ import com.cloudinaryfiles.app.data.model.Providers
 import com.cloudinaryfiles.app.ui.components.AudioPlayerBar
 import com.cloudinaryfiles.app.ui.components.FileCard
 import com.cloudinaryfiles.app.ui.components.FilterBottomSheet
+import com.cloudinaryfiles.app.ui.components.SelectionToolbar
 import com.cloudinaryfiles.app.ui.components.formatDurationSec
 import com.cloudinaryfiles.app.ui.theme.*
 import com.cloudinaryfiles.app.ui.viewmodel.FilesViewModel
@@ -278,8 +279,18 @@ fun FilesScreen(
                             )
                         }
                 ) {
-                    TopAppBar(
-                        navigationIcon = {
+                    if (state.isSelectionMode) {
+                        SelectionToolbar(
+                            selectedCount = state.selectedAssets.size,
+                            onClearSelection = { vm.clearSelection() },
+                            onSelectAll = { vm.selectAll() },
+                            onDelete = { vm.deleteSelectedAssets() },
+                            onDownload = { vm.downloadSelectedAssets() },
+                            onShare = { /* We'll implement share selected later */ }
+                        )
+                    } else {
+                        TopAppBar(
+                            navigationIcon = {
                             IconButton(onClick = { scope.launch { drawerState.open() } }) {
                                 Icon(Icons.Filled.Menu, contentDescription = "Menu")
                             }
@@ -312,8 +323,9 @@ fun FilesScreen(
                                 }
                             }
                         },
-                        colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-                    )
+                            colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
+                        )
+                    }
                 }
             },
             containerColor = Color.Transparent,
@@ -357,6 +369,7 @@ fun FilesScreen(
                                     FileCard(
                                         asset = asset,
                                         isPlaying = state.currentlyPlayingId == asset.assetId && state.isPlaying,
+                                        isSelected = state.selectedAssets.contains(asset.assetId),
                                         onPlayClick = { vm.togglePlay(asset) },
                                         onCopyLink = { vm.copyLink(asset) },
                                         onShare = {
@@ -368,6 +381,17 @@ fun FilesScreen(
                                             context.startActivity(Intent.createChooser(intent, "Share file"))
                                         },
                                         onInfo = { vm.showInfo(asset) },
+                                        onClick = {
+                                            if (state.isSelectionMode) {
+                                                vm.toggleSelection(asset.assetId)
+                                            } else {
+                                                vm.showInfo(asset)
+                                            }
+                                        },
+                                        onLongPress = {
+                                            if (!state.isSelectionMode) vm.toggleSelectionMode()
+                                            vm.toggleSelection(asset.assetId)
+                                        },
                                         modifier = Modifier.animateItem()
                                     )
                                 }

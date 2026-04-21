@@ -25,12 +25,7 @@ jobs:
 
       - name: Print Debug SHA-1 (for Google OAuth Android client setup)
         run: |
-          mkdir -p ~/.android
-          keytool -genkey -v -keystore ~/.android/debug.keystore \
-            -alias androiddebugkey -storepass android -keypass android \
-            -dname "CN=Android Debug,O=Android,C=US" \
-            -keyalg RSA -keysize 2048 -validity 10000 2>/dev/null || true
-          keytool -list -v -keystore ~/.android/debug.keystore \
+          keytool -list -v -keystore app/keystore/debug.keystore \
             -alias androiddebugkey -storepass android -keypass android 2>/dev/null | grep SHA1
 
       - name: Set up JDK 17

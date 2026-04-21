@@ -113,24 +113,17 @@ class GoogleDriveRepository {
 
     /**
      * Exchange authorization code for tokens.
-     * client_secret is OPTIONAL for Google "Desktop app" OAuth clients (they use PKCE).
-     * We only include it in the request if the user provided one.
+     * Google "Desktop app" OAuth clients DO require a client_secret.
      */
     fun exchangeCodeForToken(account: NamedAccount, code: String, port: Int): TokenResult {
         return withRetryBlocking(maxAttempts = 3) {
-            val bodyBuilder = FormBody.Builder()
+            val body = FormBody.Builder()
                 .add("code", code)
                 .add("client_id", account.oauthClientId)
+                .add("client_secret", account.oauthClientSecret)
                 .add("redirect_uri", "http://127.0.0.1:$port")
                 .add("grant_type", "authorization_code")
-
-            // Only add client_secret if the user actually provided one.
-            // Google "Desktop app" type clients do NOT require a secret.
-            if (account.oauthClientSecret.isNotBlank()) {
-                bodyBuilder.add("client_secret", account.oauthClientSecret)
-            }
-
-            val body = bodyBuilder.build()
+                .build()
             val resp = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
             val respBody = resp.body?.use { it.string() } ?: ""
             val json = JSONObject(respBody)
@@ -149,16 +142,12 @@ class GoogleDriveRepository {
 
     private fun refreshToken(account: NamedAccount): String {
         return withRetryBlocking(maxAttempts = 2) {
-            val bodyBuilder = FormBody.Builder()
+            val body = FormBody.Builder()
                 .add("client_id", account.oauthClientId)
+                .add("client_secret", account.oauthClientSecret)
                 .add("refresh_token", account.oauthRefreshToken)
                 .add("grant_type", "refresh_token")
-
-            if (account.oauthClientSecret.isNotBlank()) {
-                bodyBuilder.add("client_secret", account.oauthClientSecret)
-            }
-
-            val body = bodyBuilder.build()
+                .build()
             val resp = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
             val respBody = resp.body?.use { it.string() } ?: ""
             val json = JSONObject(respBody)
@@ -182,5 +171,20 @@ class GoogleDriveRepository {
         mime.startsWith("video") || ext in setOf("mp4","mov","avi","mkv","webm") -> "video"
         mime.startsWith("image") -> "image"
         else -> "raw"
+    }
+
+    fun deleteFile(account: NamedAccount, fileId: String): Boolean {
+        return try {
+            val token = freshToken(account) ?: return false
+            val req = Request.Builder()
+                .url("https://www.googleapis.com/drive/v3/files/$fileId")
+                .delete()
+                .header("Authorization", "Bearer $token")
+                .build()
+            val resp = client.newCall(req).execute()
+            resp.isSuccessful
+        } catch (e: Exception) {
+            false
+        }
     }
 }

@@ -4,6 +4,7 @@ import android.util.Base64
 import com.cloudinaryfiles.app.data.api.CloudinaryApi
 import com.cloudinaryfiles.app.data.model.CloudinaryAsset
 import com.cloudinaryfiles.app.data.model.CloudinaryCredentials
+import com.cloudinaryfiles.app.data.model.CloudinarySearchRequest
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import okhttp3.OkHttpClient
@@ -57,7 +58,12 @@ class CloudinaryRepository {
         var page = 0
         do {
             val resp = try {
-                api.getVideoResources(cloudName = credentials.cloudName, nextCursor = cursor)
+                val req = CloudinarySearchRequest(
+                    expression = "resource_type:video",
+                    withField = listOf("duration"),
+                    nextCursor = cursor
+                )
+                api.searchResources(cloudName = credentials.cloudName, request = req)
             } catch (e: Exception) {
                 emit(RepositoryResult.Error("Network error: ${e.message}"))
                 return@flow
@@ -110,5 +116,23 @@ class CloudinaryRepository {
         } while (cursor != null)
 
         emit(RepositoryResult.Success(all))
+    }
+
+    suspend fun deleteAssets(credentials: CloudinaryCredentials, assets: List<CloudinaryAsset>): Boolean {
+        val api = buildApi(credentials)
+        // Cloudinary requires deleting by resource_type
+        val byType = assets.groupBy { it.resourceType.ifBlank { "image" } }
+        var success = true
+        for ((type, list) in byType) {
+            val publicIds = list.map { it.publicId }
+            try {
+                val req = mapOf("public_ids" to publicIds)
+                val resp = api.deleteResources(credentials.cloudName, type, req)
+                if (!resp.isSuccessful) success = false
+            } catch (e: Exception) {
+                success = false
+            }
+        }
+        return success
     }
 }
