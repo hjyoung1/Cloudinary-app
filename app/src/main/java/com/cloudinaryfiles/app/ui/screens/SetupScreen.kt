@@ -1,7 +1,5 @@
 package com.cloudinaryfiles.app.ui.screens
 
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -46,7 +44,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import net.openid.appauth.*
 import android.net.Uri
 import java.util.UUID
 
@@ -136,52 +133,8 @@ fun SetupScreen(
     }
 
     // AppAuth for Dropbox/OneDrive/Box
-    val authService = remember { AuthorizationService(context) }
-    DisposableEffect(Unit) { onDispose { authService.dispose() } }
     var pendingAccountId by remember { mutableStateOf<String?>(null) }
     var pendingPort by remember { mutableStateOf(0) }
-    // Holds the account locally until auth succeeds — avoids saving orphaned accounts on failure
-    var pendingAppAuthAccount by remember { mutableStateOf<NamedAccount?>(null) }
-
-    val oauthLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val data = result.data ?: run { isLoading = false; return@rememberLauncherForActivityResult }
-        val authResponse  = AuthorizationResponse.fromIntent(data)
-        val authException = AuthorizationException.fromIntent(data)
-        if (authException != null || authResponse == null) {
-            // Auth cancelled or failed — account was NOT saved yet, nothing to clean up
-            error = authException?.message ?: "Authorization cancelled"
-            isLoading = false
-            return@rememberLauncherForActivityResult
-        }
-        isLoading = true
-        scope.launch {
-            try {
-                val code  = authResponse.authorizationCode!!
-                val acct  = pendingAppAuthAccount ?: throw Exception("No pending account")
-                val (at, rt, exp) = withContext(Dispatchers.IO) {
-                    when (selectedProvider.authType) {
-                        ProviderAuthType.OAUTH_DROPBOX  -> { val r = DropboxRepository().exchangeCodeForToken(acct, code);    Triple(r.accessToken, r.refreshToken, r.expiryEpoch) }
-                        ProviderAuthType.OAUTH_ONEDRIVE -> { val r = OneDriveRepository().exchangeCodeForToken(acct, code);   Triple(r.accessToken, r.refreshToken, r.expiryEpoch) }
-                        ProviderAuthType.OAUTH_BOX      -> { val r = BoxRepository().exchangeCodeForToken(acct, code);        Triple(r.accessToken, r.refreshToken, r.expiryEpoch) }
-                        else -> throw Exception("Unknown provider")
-                    }
-                }
-                // ✅ Only save account AFTER token exchange succeeds
-                val finalAccount = acct.copy(oauthAccessToken = at, oauthRefreshToken = rt, oauthTokenExpiry = exp)
-                prefs.saveAccount(finalAccount)
-                prefs.setActiveAccount(finalAccount.id)
-                isLoading = false
-                pendingAppAuthAccount = null
-                onNavigateToFiles()
-            } catch (e: Exception) {
-                // Token exchange failed — account was never saved, nothing to clean up
-                error = "Auth failed: ${e.message}"; isLoading = false
-                pendingAppAuthAccount = null
-            }
-        }
-    }
 
     // Google Drive loopback flow
     fun startGoogleOAuth() {
@@ -193,47 +146,46 @@ fun SetupScreen(
             val port   = server.start()
             pendingPort = port
 
-            val name = accountName.ifBlank { "Google Drive" }
-            val account = NamedAccount(
-                id = accId, name = name, providerKey = selectedProvider.key,
+            val stashedAccount = NamedAccount(
+                id = accId, name = accountName.ifBlank { "Google Drive" },
+                providerKey = selectedProvider.key,
                 oauthClientId = oauthClientId.trim(), oauthClientSecret = oauthClientSecret.trim()
             )
-            prefs.saveAccount(account)
-            pendingAccountId = accId
-            // Make manual paste available as fallback from this point onwards
-            manualPasteAccount = account
+            // Store for manual-paste fallback; DO NOT save to prefs yet
+            manualPasteAccount = stashedAccount
             manualPastePort    = port
-            manualPasteVisible = false   // hidden until user taps "Trouble?" link
+            manualPasteVisible = false
 
             val authUrl = GoogleDriveRepository.buildAuthUrl(oauthClientId.trim(), port)
 
-            // BUG FIX: start accept() BEFORE opening browser to eliminate race window
-            val codeDeferred = kotlinx.coroutines.async(Dispatchers.IO) { server.waitForCode() }
+            // Start listening BEFORE browser opens to avoid race condition
+            val codeDeferred = async(Dispatchers.IO) { server.waitForCode() }
 
-            // Open in browser
             val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(authUrl))
             intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(intent)
-
             loadingMsg = "Waiting for Google sign-in…\n(Complete in browser, then return here)"
 
             try {
                 val code = codeDeferred.await()
                 server.stop()
                 loadingMsg = "Exchanging tokens…"
-
-                // BUG FIX: use account we already have — no re-fetch needed (collect never terminates)
                 val result = withContext(Dispatchers.IO) {
-                    GoogleDriveRepository().exchangeCodeForToken(account, code, port)
+                    GoogleDriveRepository().exchangeCodeForToken(stashedAccount, code, port)
                 }
-                prefs.updateOAuthTokens(accId, result.accessToken, result.refreshToken, result.expiryEpoch)
+                // Save ONLY after successful token exchange — avoids loading with empty tokens
+                val finalAccount = stashedAccount.copy(
+                    oauthAccessToken  = result.accessToken,
+                    oauthRefreshToken = result.refreshToken,
+                    oauthTokenExpiry  = result.expiryEpoch
+                )
+                prefs.saveAccount(finalAccount)
                 prefs.setActiveAccount(accId)
                 isLoading = false
                 onNavigateToFiles()
             } catch (e: Exception) {
                 codeDeferred.cancel()
                 server.stop()
-                prefs.deleteAccount(accId)
                 error = "Sign-in failed: ${e.message}"; isLoading = false; loadingMsg = ""
             }
         }
@@ -267,40 +219,84 @@ fun SetupScreen(
         }
     }
 
-    // AppAuth for Dropbox/OneDrive/Box
+    // Loopback OAuth for Dropbox / OneDrive / Box (avoids custom URI scheme restrictions)
     fun startAppAuth() {
         val p = selectedProvider
-        val (authEndpoint, tokenEndpoint, scopes) = when (p.authType) {
-            ProviderAuthType.OAUTH_DROPBOX  -> Triple(DropboxRepository.AUTH_URL, DropboxRepository.TOKEN_URL, DropboxRepository.SCOPES)
-            ProviderAuthType.OAUTH_ONEDRIVE -> Triple(OneDriveRepository.AUTH_URL, OneDriveRepository.TOKEN_URL, OneDriveRepository.SCOPES)
-            ProviderAuthType.OAUTH_BOX      -> Triple(BoxRepository.AUTH_URL, BoxRepository.TOKEN_URL, "root_readonly")
-            else -> return
-        }
         if (oauthClientId.isBlank()) { error = "Client ID is required"; return }
-        isLoading = true; error = null
+        isLoading = true; loadingMsg = "Starting authorization…"; error = null
         scope.launch {
-            val accId = editAccountId ?: "acct_${UUID.randomUUID()}"
-            val account = NamedAccount(
+            val accId  = editAccountId ?: "acct_${UUID.randomUUID()}"
+            val server = LoopbackOAuthServer()
+            val port   = server.start()
+
+            val stashedAccount = NamedAccount(
                 id = accId, name = accountName.ifBlank { p.label }, providerKey = p.key,
                 oauthClientId = oauthClientId.trim(), oauthClientSecret = oauthClientSecret.trim()
             )
-            // Store locally — NOT saved to prefs yet; saved only after token exchange succeeds
-            pendingAppAuthAccount = account
-            pendingAccountId = accId
-            val serviceConfig = AuthorizationServiceConfiguration(
-                Uri.parse(authEndpoint), Uri.parse(tokenEndpoint)
-            )
-            val redirectUri = Uri.parse("com.cloudinaryfiles.app:/oauth2redirect")
-            val reqBuilder = AuthorizationRequest.Builder(
-                serviceConfig, oauthClientId.trim(), ResponseTypeValues.CODE, redirectUri
-            ).setScope(scopes)
-                .setCodeVerifier(null)  // ← PKCE disabled: our manual token exchange has no code_verifier
-            if (p.authType == ProviderAuthType.OAUTH_DROPBOX)
-                reqBuilder.setAdditionalParameters(mapOf("token_access_type" to "offline"))
-            val authIntent = authService.getAuthorizationRequestIntent(reqBuilder.build())
-            oauthLauncher.launch(authIntent)
+
+            val authUrl = when (p.authType) {
+                ProviderAuthType.OAUTH_DROPBOX -> buildString {
+                    append(DropboxRepository.AUTH_URL)
+                    append("?client_id=${encode(oauthClientId.trim())}")
+                    append("&redirect_uri=${encode("http://127.0.0.1:$port")}")
+                    append("&response_type=code")
+                    append("&token_access_type=offline")
+                }
+                ProviderAuthType.OAUTH_ONEDRIVE -> buildString {
+                    append(OneDriveRepository.AUTH_URL)
+                    append("?client_id=${encode(oauthClientId.trim())}")
+                    append("&redirect_uri=${encode("http://127.0.0.1:$port")}")
+                    append("&response_type=code")
+                    append("&scope=${encode(OneDriveRepository.SCOPES)}")
+                }
+                ProviderAuthType.OAUTH_BOX -> buildString {
+                    append(BoxRepository.AUTH_URL)
+                    append("?client_id=${encode(oauthClientId.trim())}")
+                    append("&redirect_uri=${encode("http://127.0.0.1:$port")}")
+                    append("&response_type=code")
+                }
+                else -> { server.stop(); isLoading = false; return@launch }
+            }
+
+            // Start listening BEFORE browser opens
+            val codeDeferred = async(Dispatchers.IO) { server.waitForCode() }
+
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(authUrl))
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            loadingMsg = "Waiting for ${p.label} sign-in…\n(Complete in browser, then return here)"
+
+            try {
+                val code = codeDeferred.await()
+                server.stop()
+                loadingMsg = "Exchanging tokens…"
+                val result = withContext(Dispatchers.IO) {
+                    when (p.authType) {
+                        ProviderAuthType.OAUTH_DROPBOX  -> { val r = DropboxRepository().exchangeCodeForToken(stashedAccount, code, port); Triple(r.accessToken, r.refreshToken, r.expiryEpoch) }
+                        ProviderAuthType.OAUTH_ONEDRIVE -> { val r = OneDriveRepository().exchangeCodeForToken(stashedAccount, code, port); Triple(r.accessToken, r.refreshToken, r.expiryEpoch) }
+                        ProviderAuthType.OAUTH_BOX      -> { val r = BoxRepository().exchangeCodeForToken(stashedAccount, code, port);      Triple(r.accessToken, r.refreshToken, r.expiryEpoch) }
+                        else -> throw Exception("Unknown provider")
+                    }
+                }
+                // Save ONLY after successful token exchange
+                val finalAccount = stashedAccount.copy(
+                    oauthAccessToken  = result.first,
+                    oauthRefreshToken = result.second,
+                    oauthTokenExpiry  = result.third
+                )
+                prefs.saveAccount(finalAccount)
+                prefs.setActiveAccount(accId)
+                isLoading = false; loadingMsg = ""
+                onNavigateToFiles()
+            } catch (e: Exception) {
+                codeDeferred.cancel()
+                server.stop()
+                error = "Sign-in failed: ${e.message}"; isLoading = false; loadingMsg = ""
+            }
         }
     }
+
+    private fun encode(s: String) = java.net.URLEncoder.encode(s, "UTF-8")
 
     fun saveNonOAuth() {
         val p = selectedProvider; error = null
@@ -626,19 +622,19 @@ fun SetupScreen(
                                     ProviderAuthType.OAUTH_DROPBOX -> "www.dropbox.com/developers" to listOf(
                                         "1. Create app at dropbox.com/developers",
                                         "2. Choose Scoped access → Full Dropbox",
-                                        "3. Redirect URI: com.cloudinaryfiles.app:/oauth2redirect",
+                                        "3. In OAuth 2 settings, add redirect URI:",
                                         "4. Copy App key (Client ID) and App secret"
                                     )
                                     ProviderAuthType.OAUTH_ONEDRIVE -> "portal.azure.com" to listOf(
                                         "1. Azure Portal → App registrations → New",
-                                        "2. Platform: Mobile/Desktop",
-                                        "3. Redirect URI: com.cloudinaryfiles.app:/oauth2redirect",
+                                        "2. Platform: Mobile/Desktop app",
+                                        "3. Add redirect URI (see below)",
                                         "4. Copy Application (client) ID"
                                     )
                                     else -> "developer.box.com" to listOf(
                                         "1. developer.box.com → My Apps → New App",
                                         "2. Custom App → Standard OAuth 2.0",
-                                        "3. Redirect URI: com.cloudinaryfiles.app:/oauth2redirect",
+                                        "3. Add redirect URI (see below)",
                                         "4. Copy Client ID and Client Secret"
                                     )
                                 }
@@ -666,11 +662,11 @@ fun SetupScreen(
                                                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                                                 }
                                                 Spacer(Modifier.height(4.dp))
-                                                Text("Redirect URI to register:",
+                                                Text("Redirect URI to register (use http://127.0.0.1 — no port needed):",
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = MaterialTheme.colorScheme.primary)
                                                 Surface(color = Color.Black.copy(0.3f), shape = RoundedCornerShape(6.dp)) {
-                                                    Text("com.cloudinaryfiles.app:/oauth2redirect",
+                                                    Text("http://127.0.0.1",
                                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                                         style = MaterialTheme.typography.labelSmall,
                                                         color = Color.White,

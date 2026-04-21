@@ -83,11 +83,11 @@ class OneDriveRepository {
 
     data class TokenResult(val accessToken: String, val refreshToken: String, val expiryEpoch: Long)
 
-    fun exchangeCodeForToken(account: NamedAccount, code: String): TokenResult {
+    fun exchangeCodeForToken(account: NamedAccount, code: String, port: Int): TokenResult {
         val body = FormBody.Builder()
             .add("code", code)
             .add("client_id", account.oauthClientId)
-            .add("redirect_uri", REDIRECT_URI)
+            .add("redirect_uri", "http://127.0.0.1:$port")
             .add("grant_type", "authorization_code")
             .add("scope", SCOPES)
             .apply { if (account.oauthClientSecret.isNotBlank()) add("client_secret", account.oauthClientSecret) }

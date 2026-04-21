@@ -41,7 +41,7 @@ fun FileCard(
     val pulseAnim = rememberInfiniteTransition(label = "pulse")
     val scale by pulseAnim.animateFloat(
         initialValue = 1f, targetValue = if (isPlaying) 1.12f else 1f,
-        animationSpec = infiniteRepeatable(
+        animationSpec = infiniteRepeatable<Float>(
             animation = tween(600, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ), label = "scale"
@@ -221,7 +221,10 @@ private fun WaveformDecoration(isPlaying: Boolean) {
     val anim = rememberInfiniteTransition(label = "wave")
     val phase by anim.animateFloat(
         initialValue = 0f, targetValue = if (isPlaying) 1f else 0f,
-        animationSpec = if (isPlaying) infiniteRepeatable(tween(1200, easing = LinearEasing)) else tween(0),
+        animationSpec = if (isPlaying)
+            infiniteRepeatable<Float>(animation = tween(1200, easing = LinearEasing))
+        else
+            tween<Float>(0),
         label = "phase"
     )
     Row(
