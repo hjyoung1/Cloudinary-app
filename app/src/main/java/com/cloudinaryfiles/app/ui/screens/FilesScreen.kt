@@ -1,6 +1,7 @@
 package com.cloudinaryfiles.app.ui.screens
 
 import android.content.Intent
+import androidx.core.content.FileProvider
 import android.net.Uri
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -247,7 +248,19 @@ fun FilesScreen(
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp, horizontal = 16.dp),
                     color = Color.White.copy(0.08f))
 
-                // Disconnect
+                // Export Logs
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Outlined.BugReport, null, tint = Color(0xFF74B9FF)) },
+                    label = { Text("Export Logs", color = Color(0xFF74B9FF)) },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        exportLogs(context)
+                    },
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                )
+
+                                // Disconnect
                 NavigationDrawerItem(
                     icon = { Icon(Icons.Outlined.Logout, null, tint = MaterialTheme.colorScheme.error) },
                     label = { Text("Disconnect Account", color = MaterialTheme.colorScheme.error) },
@@ -838,3 +851,50 @@ private fun formatFullDate(raw: String): String = try {
         .format(DateTimeFormatter.ofPattern("MMM d, yyyy  HH:mm"))
 } catch (_: Exception) { raw }
 
+
+
+// ─── Export logs helper ───────────────────────────────────────────────────────
+/**
+ * Gathers all CloudVault log files and opens Android's share sheet.
+ * No PC or root needed — share to WhatsApp, email, Telegram, Drive, etc.
+ */
+private fun exportLogs(context: android.content.Context) {
+    val logFiles = com.cloudinaryfiles.app.AppLogger.allLogFiles()
+
+    if (logFiles.isEmpty()) {
+        android.widget.Toast.makeText(context, "No log files yet — reproduce your issue first", android.widget.Toast.LENGTH_LONG).show()
+        return
+    }
+
+    // Prefer sharing the file so the recipient gets the full content.
+    // Fall back to plain text if FileProvider is not configured.
+    val uris = logFiles.mapNotNull { file ->
+        try {
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        } catch (_: Exception) { null }
+    }
+
+    val intent = if (uris.isNotEmpty()) {
+        // Share up to the 3 most recent log files as attachments
+        val shareUris = ArrayList(uris.take(3))
+        Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+            type = "text/plain"
+            putParcelableArrayListExtra(Intent.EXTRA_STREAM, shareUris)
+            putExtra(Intent.EXTRA_SUBJECT, "CloudVault Logs")
+            putExtra(Intent.EXTRA_TEXT, "CloudVault log files — ${logFiles.size} file(s)")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+    } else {
+        // FileProvider not set up — share as plain text (capped at 50 KB)
+        val text = logFiles.firstOrNull()?.let { file ->
+            try { file.readText(Charsets.UTF_8).takeLast(50_000) } catch (_: Exception) { null }
+        } ?: "Could not read log file"
+        Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+            putExtra(Intent.EXTRA_SUBJECT, "CloudVault Logs")
+        }
+    }
+
+    context.startActivity(Intent.createChooser(intent, "Export logs via…"))
+}

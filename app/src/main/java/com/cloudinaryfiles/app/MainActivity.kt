@@ -26,26 +26,23 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        AppLogger.i(LOG_TAG, "─── onCreate ───────────────────────────────────────────────")
+        AppLogger.i(LOG_TAG, "--- onCreate ---")
         AppLogger.i(LOG_TAG, "savedInstanceState = ${if (savedInstanceState == null) "null (fresh start)" else "non-null (restored)"}")
         AppLogger.i(LOG_TAG, "Intent action  : ${intent?.action}")
-        AppLogger.i(LOG_TAG, "Intent data    : ${intent?.data}")
-        AppLogger.d(LOG_TAG, "Log files are at:")
+        AppLogger.d(LOG_TAG, "Log files:")
         AppLogger.d(LOG_TAG, "  INTERNAL : ${AppLogger.getInternalLogDir()?.absolutePath}")
         AppLogger.d(LOG_TAG, "  EXTERNAL : ${AppLogger.getExternalLogDir()?.absolutePath}")
-        AppLogger.d(LOG_TAG, "Pull logs via adb:")
-        AppLogger.d(LOG_TAG, "  adb pull /data/data/com.cloudinaryfiles.app/files/cloudvault_logs/")
 
         enableEdgeToEdge()
 
         val prefs = UserPreferences(this)
 
-        AppLogger.d(LOG_TAG, "Checking active account to determine start destination…")
+        AppLogger.d(LOG_TAG, "Checking active account…")
         val startDest = runBlocking {
             val account = prefs.activeAccount.first()
-            AppLogger.i(LOG_TAG, "Active account check → ${
-                if (account == null) "null → navigating to 'setup'"
-                else "found: id=${account.id}, provider=${account.providerKey}, name='${account.name}' → navigating to 'files'"
+            AppLogger.i(LOG_TAG, "Active account → ${
+                if (account == null) "null → 'setup'"
+                else "id=${account.id}, provider=${account.providerKey} → 'files'"
             }")
             if (account != null) "files" else "setup"
         }
@@ -56,50 +53,49 @@ class MainActivity : ComponentActivity() {
                 Box(Modifier.fillMaxSize().background(SurfaceDark)) {
                     val navController = rememberNavController()
                     NavHost(navController = navController, startDestination = startDest) {
+
                         composable("setup") {
-                            AppLogger.d(LOG_TAG, "Composing 'setup' screen")
+                            AppLogger.d(LOG_TAG, "Composing 'setup'")
                             SetupScreen(
                                 onNavigateToFiles = {
-                                    AppLogger.i(LOG_TAG, "SetupScreen → onNavigateToFiles")
-                                    navController.navigate("files") {
-                                        popUpTo("setup") { inclusive = true }
-                                    }
+                                    AppLogger.i(LOG_TAG, "setup → files")
+                                    navController.navigate("files") { popUpTo("setup") { inclusive = true } }
                                 },
                                 addMode = false
                             )
                         }
+
                         composable("add_account") {
-                            AppLogger.d(LOG_TAG, "Composing 'add_account' screen")
+                            AppLogger.d(LOG_TAG, "Composing 'add_account'")
                             SetupScreen(
                                 onNavigateToFiles = {
-                                    AppLogger.i(LOG_TAG, "add_account SetupScreen → onNavigateToFiles")
+                                    AppLogger.i(LOG_TAG, "add_account → popBackStack")
                                     navController.popBackStack()
                                 },
                                 addMode = true
                             )
                         }
+
                         composable("files") {
-                            AppLogger.d(LOG_TAG, "Composing 'files' screen")
+                            AppLogger.d(LOG_TAG, "Composing 'files'")
                             FilesScreen(
                                 onNavigateToSetup = {
-                                    AppLogger.i(LOG_TAG, "FilesScreen → onNavigateToSetup")
-                                    navController.navigate("setup") {
-                                        popUpTo("files") { inclusive = true }
-                                    }
+                                    AppLogger.i(LOG_TAG, "files → setup")
+                                    navController.navigate("setup") { popUpTo("files") { inclusive = true } }
                                 },
                                 onAddAccount = {
-                                    AppLogger.i(LOG_TAG, "FilesScreen → onAddAccount")
+                                    AppLogger.i(LOG_TAG, "files → add_account")
                                     navController.navigate("add_account")
                                 },
                                 onEditAccount = { accountId ->
-                                    AppLogger.i(LOG_TAG, "FilesScreen → onEditAccount(accountId=$accountId)")
+                                    AppLogger.i(LOG_TAG, "files → edit_account/$accountId")
                                     navController.navigate("edit_account/$accountId")
                                 }
                             )
                         }
                         composable("edit_account/{accountId}") { backStackEntry ->
                             val accountId = backStackEntry.arguments?.getString("accountId") ?: ""
-                            AppLogger.d(LOG_TAG, "Composing 'edit_account' screen for accountId=$accountId")
+                            AppLogger.d(LOG_TAG, "Composing 'edit_account' for $accountId")
                             SetupScreen(
                                 onNavigateToFiles = { navController.popBackStack() },
                                 addMode = true,
@@ -119,9 +115,9 @@ class MainActivity : ComponentActivity() {
         AppLogger.i(LOG_TAG, "onNewIntent: action=${intent.action}, data=${intent.data}")
     }
 
-    override fun onStart()   { super.onStart();  AppLogger.d(LOG_TAG, "onStart") }
-    override fun onResume()  { super.onResume(); AppLogger.d(LOG_TAG, "onResume") }
-    override fun onPause()   { super.onPause();  AppLogger.d(LOG_TAG, "onPause") }
-    override fun onStop()    { super.onStop();   AppLogger.d(LOG_TAG, "onStop") }
+    override fun onStart()   { super.onStart();   AppLogger.d(LOG_TAG, "onStart") }
+    override fun onResume()  { super.onResume();  AppLogger.d(LOG_TAG, "onResume") }
+    override fun onPause()   { super.onPause();   AppLogger.d(LOG_TAG, "onPause") }
+    override fun onStop()    { super.onStop();    AppLogger.d(LOG_TAG, "onStop") }
     override fun onDestroy() { super.onDestroy(); AppLogger.i(LOG_TAG, "onDestroy") }
 }
