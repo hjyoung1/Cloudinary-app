@@ -189,7 +189,7 @@ class DropboxRepository {
             val body = JSONObject().put("path", if (path.startsWith("/")) path else "/$path").toString()
             val req = Request.Builder()
                 .url("https://api.dropboxapi.com/2/files/delete_v2")
-                .post(RequestBody.create(MediaType.parse("application/json"), body))
+                .post(body.toRequestBody("application/json".toMediaType()))
                 .header("Authorization", "Bearer $token")
                 .build()
             val resp = client.newCall(req).execute()
