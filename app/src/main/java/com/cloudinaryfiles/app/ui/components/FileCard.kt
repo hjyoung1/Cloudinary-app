@@ -239,6 +239,8 @@ fun FileCard(
                 }
             }
 
+            } // End of Column (line 82)
+
             // Selection Overlay
             if (isSelected) {
                 Box(
