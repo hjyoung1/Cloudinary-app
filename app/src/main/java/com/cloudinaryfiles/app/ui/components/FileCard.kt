@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -73,7 +74,7 @@ fun FileCard(
         Box(modifier = Modifier
             .fillMaxSize()
             .clip(RoundedCornerShape(20.dp))
-            .androidx.compose.foundation.combinedClickable(
+            .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongPress
             )
@@ -132,7 +133,7 @@ fun FileCard(
                                 modifier = Modifier.size(10.dp)
                             )
                             Text(
-                                text = durationText,
+                                text = durationText ?: "",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color.White,
                                 fontSize = 10.sp,
@@ -192,7 +193,7 @@ fun FileCard(
                         Text(" · ", style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(
-                            text = durationText,
+                            text = durationText ?: "",
                             style = MaterialTheme.typography.labelSmall,
                             color = if (asset.isAudio) AudioAccent else MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.Medium
