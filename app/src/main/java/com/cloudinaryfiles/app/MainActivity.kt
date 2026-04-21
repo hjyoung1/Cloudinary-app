@@ -1,5 +1,6 @@
 package com.cloudinaryfiles.app
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -20,16 +21,35 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 
 class MainActivity : ComponentActivity() {
+
+    private val LOG_TAG = "MainActivity"
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppLogger.i(LOG_TAG, "─── onCreate ───────────────────────────────────────────────")
+        AppLogger.i(LOG_TAG, "savedInstanceState = ${if (savedInstanceState == null) "null (fresh start)" else "non-null (restored)"}")
+        AppLogger.i(LOG_TAG, "Intent action  : ${intent?.action}")
+        AppLogger.i(LOG_TAG, "Intent data    : ${intent?.data}")
+        AppLogger.d(LOG_TAG, "Log files are at:")
+        AppLogger.d(LOG_TAG, "  INTERNAL : ${AppLogger.getInternalLogDir()?.absolutePath}")
+        AppLogger.d(LOG_TAG, "  EXTERNAL : ${AppLogger.getExternalLogDir()?.absolutePath}")
+        AppLogger.d(LOG_TAG, "Pull logs via adb:")
+        AppLogger.d(LOG_TAG, "  adb pull /data/data/com.cloudinaryfiles.app/files/cloudvault_logs/")
+
         enableEdgeToEdge()
 
         val prefs = UserPreferences(this)
-        // Determine start destination synchronously to skip login flash
+
+        AppLogger.d(LOG_TAG, "Checking active account to determine start destination…")
         val startDest = runBlocking {
-            // credentials is Cloudinary-only; activeAccount works for all providers
-            if (prefs.activeAccount.first() != null) "files" else "setup"
+            val account = prefs.activeAccount.first()
+            AppLogger.i(LOG_TAG, "Active account check → ${
+                if (account == null) "null → navigating to 'setup'"
+                else "found: id=${account.id}, provider=${account.providerKey}, name='${account.name}' → navigating to 'files'"
+            }")
+            if (account != null) "files" else "setup"
         }
+        AppLogger.i(LOG_TAG, "startDestination = '$startDest'")
 
         setContent {
             CloudinaryFilesTheme {
@@ -37,8 +57,10 @@ class MainActivity : ComponentActivity() {
                     val navController = rememberNavController()
                     NavHost(navController = navController, startDestination = startDest) {
                         composable("setup") {
+                            AppLogger.d(LOG_TAG, "Composing 'setup' screen")
                             SetupScreen(
                                 onNavigateToFiles = {
+                                    AppLogger.i(LOG_TAG, "SetupScreen → onNavigateToFiles")
                                     navController.navigate("files") {
                                         popUpTo("setup") { inclusive = true }
                                     }
@@ -46,32 +68,38 @@ class MainActivity : ComponentActivity() {
                                 addMode = false
                             )
                         }
-                        // Route for adding another account from within the app
                         composable("add_account") {
+                            AppLogger.d(LOG_TAG, "Composing 'add_account' screen")
                             SetupScreen(
                                 onNavigateToFiles = {
+                                    AppLogger.i(LOG_TAG, "add_account SetupScreen → onNavigateToFiles")
                                     navController.popBackStack()
                                 },
                                 addMode = true
                             )
                         }
                         composable("files") {
+                            AppLogger.d(LOG_TAG, "Composing 'files' screen")
                             FilesScreen(
                                 onNavigateToSetup = {
+                                    AppLogger.i(LOG_TAG, "FilesScreen → onNavigateToSetup")
                                     navController.navigate("setup") {
                                         popUpTo("files") { inclusive = true }
                                     }
                                 },
                                 onAddAccount = {
+                                    AppLogger.i(LOG_TAG, "FilesScreen → onAddAccount")
                                     navController.navigate("add_account")
                                 },
                                 onEditAccount = { accountId ->
+                                    AppLogger.i(LOG_TAG, "FilesScreen → onEditAccount(accountId=$accountId)")
                                     navController.navigate("edit_account/$accountId")
                                 }
                             )
                         }
                         composable("edit_account/{accountId}") { backStackEntry ->
                             val accountId = backStackEntry.arguments?.getString("accountId") ?: ""
+                            AppLogger.d(LOG_TAG, "Composing 'edit_account' screen for accountId=$accountId")
                             SetupScreen(
                                 onNavigateToFiles = { navController.popBackStack() },
                                 addMode = true,
@@ -82,5 +110,18 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        AppLogger.i(LOG_TAG, "onCreate complete")
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        AppLogger.i(LOG_TAG, "onNewIntent: action=${intent.action}, data=${intent.data}")
+    }
+
+    override fun onStart()   { super.onStart();  AppLogger.d(LOG_TAG, "onStart") }
+    override fun onResume()  { super.onResume(); AppLogger.d(LOG_TAG, "onResume") }
+    override fun onPause()   { super.onPause();  AppLogger.d(LOG_TAG, "onPause") }
+    override fun onStop()    { super.onStop();   AppLogger.d(LOG_TAG, "onStop") }
+    override fun onDestroy() { super.onDestroy(); AppLogger.i(LOG_TAG, "onDestroy") }
 }

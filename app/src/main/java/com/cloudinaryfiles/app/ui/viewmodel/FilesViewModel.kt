@@ -1,17 +1,18 @@
 package com.cloudinaryfiles.app.ui.viewmodel
 
 import android.app.Application
+import android.app.DownloadManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
-import android.app.DownloadManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import com.cloudinaryfiles.app.AppLogger
 import com.cloudinaryfiles.app.data.cache.AssetCache
 import com.cloudinaryfiles.app.data.model.*
 import com.cloudinaryfiles.app.data.preferences.NamedAccount
@@ -50,15 +51,17 @@ data class FilesUiState(
 
 class FilesViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val prefs      = UserPreferences(application)
-    private val cloudRepo  = CloudinaryRepository()
-    private val s3Repo     = S3Repository()
-    private val gDriveRepo = GoogleDriveRepository()
-    private val dropboxRepo = DropboxRepository()
+    private val LOG = "FilesViewModel"
+
+    private val prefs        = UserPreferences(application)
+    private val cloudRepo    = CloudinaryRepository()
+    private val s3Repo       = S3Repository()
+    private val gDriveRepo   = GoogleDriveRepository()
+    private val dropboxRepo  = DropboxRepository()
     private val oneDriveRepo = OneDriveRepository()
-    private val boxRepo    = BoxRepository()
-    private val webDavRepo = WebDavDirectRepository()
-    private val cache      = AssetCache(application)
+    private val boxRepo      = BoxRepository()
+    private val webDavRepo   = WebDavDirectRepository()
+    private val cache        = AssetCache(application)
 
     private val _state = MutableStateFlow(FilesUiState())
     val state: StateFlow<FilesUiState> = _state.asStateFlow()
@@ -66,23 +69,48 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
     private var player: ExoPlayer? = null
 
     init {
-        viewModelScope.launch { prefs.accounts.collect { _state.update { s -> s.copy(accounts = it) } } }
-        viewModelScope.launch { prefs.activeAccountId.collect { _state.update { s -> s.copy(activeAccountId = it) } } }
+        AppLogger.i(LOG, "FilesViewModel created — wiring account observers…")
+
+        viewModelScope.launch {
+            prefs.accounts.collect { accounts ->
+                AppLogger.d(LOG, "accounts updated: ${accounts.size} total — ${accounts.map { "${it.id}(${it.providerKey})" }}")
+                _state.update { s -> s.copy(accounts = accounts) }
+            }
+        }
+
+        viewModelScope.launch {
+            prefs.activeAccountId.collect { id ->
+                AppLogger.d(LOG, "activeAccountId updated: $id")
+                _state.update { s -> s.copy(activeAccountId = id) }
+            }
+        }
+
         viewModelScope.launch {
             var lastId: String? = null
             prefs.activeAccount.collect { account ->
+                AppLogger.i(LOG, "activeAccount updated: ${
+                    if (account == null) "null"
+                    else "id=${account.id}, provider=${account.providerKey}, name='${account.name}'"
+                }")
                 _state.update { it.copy(activeAccount = account) }
                 val newId = account?.id
+
                 if (account != null && newId != lastId) {
+                    AppLogger.i(LOG, "Account changed: $lastId → $newId — loading assets…")
                     lastId = newId
+
+                    AppLogger.d(LOG, "Checking cache for account $newId…")
                     val cached = cache.load(account.id)
                     if (!cached.isNullOrEmpty()) {
+                        AppLogger.i(LOG, "Cache HIT — ${cached.size} assets restored from disk cache")
                         _state.update { it.copy(allAssets = cached, isLoading = false) }
                         reFilter()
                     } else {
+                        AppLogger.i(LOG, "Cache MISS — fetching from provider…")
                         loadAssets(account, isRefresh = false)
                     }
                 } else if (account == null) {
+                    AppLogger.i(LOG, "Active account set to null — clearing assets")
                     lastId = null
                     _state.update { it.copy(allAssets = emptyList(), filteredAssets = emptyList()) }
                 }
@@ -93,6 +121,7 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
     // ─── Account management ──────────────────────────────────────────────────
 
     fun switchAccount(id: String) {
+        AppLogger.i(LOG, "switchAccount($id)")
         viewModelScope.launch {
             stopPlayback()
             _state.update { it.copy(allAssets = emptyList(), filteredAssets = emptyList()) }
@@ -101,18 +130,43 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteCurrentAccount() {
-        val id = _state.value.activeAccountId ?: return
-        viewModelScope.launch { stopPlayback(); cache.clear(id); prefs.deleteAccount(id) }
+        val id = _state.value.activeAccountId ?: run {
+            AppLogger.w(LOG, "deleteCurrentAccount(): no active account id")
+            return
+        }
+        AppLogger.i(LOG, "deleteCurrentAccount(): id=$id")
+        viewModelScope.launch {
+            stopPlayback()
+            cache.clear(id)
+            prefs.deleteAccount(id)
+        }
     }
 
     // ─── Playback ───────────────────────────────────────────────────────────
 
     private fun getOrCreatePlayer(): ExoPlayer {
         if (player == null) {
+            AppLogger.d(LOG, "Creating new ExoPlayer instance")
             player = ExoPlayer.Builder(getApplication()).build().also { p ->
                 p.addListener(object : Player.Listener {
-                    override fun onIsPlayingChanged(playing: Boolean) { _state.update { it.copy(isPlaying = playing) } }
-                    override fun onPlaybackStateChanged(s: Int) { if (s == Player.STATE_ENDED) _state.update { it.copy(isPlaying = false) } }
+                    override fun onIsPlayingChanged(playing: Boolean) {
+                        AppLogger.d(LOG, "ExoPlayer: isPlaying=$playing")
+                        _state.update { it.copy(isPlaying = playing) }
+                    }
+                    override fun onPlaybackStateChanged(s: Int) {
+                        val stateName = when (s) {
+                            Player.STATE_IDLE     -> "IDLE"
+                            Player.STATE_BUFFERING -> "BUFFERING"
+                            Player.STATE_READY    -> "READY"
+                            Player.STATE_ENDED    -> "ENDED"
+                            else                  -> "UNKNOWN($s)"
+                        }
+                        AppLogger.d(LOG, "ExoPlayer: playbackState=$stateName")
+                        if (s == Player.STATE_ENDED) _state.update { it.copy(isPlaying = false) }
+                    }
+                    override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                        AppLogger.e(LOG, "ExoPlayer ERROR: ${error.message} (code=${error.errorCode})", error)
+                    }
                 })
             }
         }
@@ -120,14 +174,22 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun togglePlay(asset: CloudinaryAsset) {
+        AppLogger.i(LOG, "togglePlay(): assetId=${asset.assetId}, currentlyPlaying=${_state.value.currentlyPlayingId}")
         val p = getOrCreatePlayer()
         if (_state.value.currentlyPlayingId == asset.assetId) {
-            if (p.isPlaying) p.pause() else p.play()
+            val nowPlaying = p.isPlaying
+            AppLogger.d(LOG, "  Same asset — toggling: isPlaying=$nowPlaying → ${!nowPlaying}")
+            if (nowPlaying) p.pause() else p.play()
             return
         }
         viewModelScope.launch {
-            val account = _state.value.activeAccount ?: return@launch
+            val account = _state.value.activeAccount ?: run {
+                AppLogger.e(LOG, "togglePlay(): no active account!")
+                return@launch
+            }
+            AppLogger.d(LOG, "  Resolving stream URL for ${asset.assetId}…")
             val streamUrl = withContext(Dispatchers.IO) { resolveStreamUrl(asset, account) }
+            AppLogger.i(LOG, "  streamUrl resolved: ${AppLogger.redactUrl(streamUrl)}")
             p.setMediaItem(MediaItem.fromUri(streamUrl))
             p.prepare()
             p.play()
@@ -137,36 +199,41 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun resolveStreamUrl(asset: CloudinaryAsset, account: NamedAccount): String {
         val provider = Providers.find(account.providerKey)
+        AppLogger.d(LOG, "resolveStreamUrl(): provider=${provider.key}, authType=${provider.authType}")
+
         return when (provider.authType) {
             ProviderAuthType.S3_COMPATIBLE -> {
-                // Generate presigned URL (valid 1 hour) — no auth header needed
-                val objectKey = asset.publicId
-                s3Repo.presignedGetUrl(account, objectKey)
+                val url = s3Repo.presignedGetUrl(account, asset.publicId)
+                AppLogger.d(LOG, "  S3 presigned URL generated")
+                url
             }
             ProviderAuthType.OAUTH_GOOGLE -> {
-                // Refresh token if needed and embed in URL
                 val token = gDriveRepo.freshToken(account) ?: asset.secureUrl
-                val fileId = asset.publicId
-                "https://www.googleapis.com/drive/v3/files/$fileId?alt=media&access_token=$token"
+                val url = "https://www.googleapis.com/drive/v3/files/${asset.publicId}?alt=media&access_token=$token"
+                AppLogger.d(LOG, "  Google Drive stream URL built (has token=${token.isNotBlank()})")
+                url
             }
             ProviderAuthType.OAUTH_DROPBOX -> {
-                // Already stored a temporary link from listing; just return it
-                // If it's expired (4h), the URL stored is the API URL, which needs a fresh temp link
+                AppLogger.d(LOG, "  Dropbox: returning stored temp link (may be expired after 4h): ${asset.secureUrl.take(60)}")
                 asset.secureUrl
             }
             ProviderAuthType.OAUTH_ONEDRIVE, ProviderAuthType.OAUTH_BOX -> {
-                // @microsoft.graph.downloadUrl is pre-authenticated; same for Box
+                AppLogger.d(LOG, "  ${provider.authType}: returning pre-auth download URL")
                 asset.secureUrl
             }
             ProviderAuthType.BASIC_WEBDAV -> {
-                // Credentials already embedded in URL during listing
+                AppLogger.d(LOG, "  WebDAV: returning URL with embedded credentials")
                 asset.secureUrl
             }
-            else -> asset.secureUrl
+            else -> {
+                AppLogger.d(LOG, "  ${provider.authType}: returning secureUrl")
+                asset.secureUrl
+            }
         }
     }
 
     fun stopPlayback() {
+        AppLogger.d(LOG, "stopPlayback()")
         player?.stop()
         _state.update { it.copy(currentlyPlayingId = null, isPlaying = false) }
     }
@@ -178,6 +245,7 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
     // ─── Clipboard ──────────────────────────────────────────────────────────
 
     fun copyLink(asset: CloudinaryAsset) {
+        AppLogger.d(LOG, "copyLink(): ${asset.assetId}")
         val cm = getApplication<Application>().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("URL", asset.secureUrl))
         _state.update { it.copy(snackbarMessage = "🔗 Link copied!") }
@@ -189,42 +257,126 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissInfo()                     { _state.update { it.copy(infoAsset = null) } }
     fun openFilterSheet()                 { _state.update { it.copy(isFilterSheetOpen = true) } }
     fun closeFilterSheet()                { _state.update { it.copy(isFilterSheetOpen = false) } }
-    fun applyFilter(f: FilterState)       { _state.update { it.copy(filterState = f, isFilterSheetOpen = false) }; reFilter() }
-    fun clearFilters()                    { _state.update { it.copy(filterState = FilterState()) }; reFilter() }
-    fun clearSnackbar()                   { _state.update { it.copy(snackbarMessage = null) } }
+    fun applyFilter(f: FilterState) {
+        AppLogger.d(LOG, "applyFilter(): query='${f.searchQuery}', type=${f.fileTypeFilter}, sort=${f.sortBy}")
+        _state.update { it.copy(filterState = f, isFilterSheetOpen = false) }
+        reFilter()
+    }
+    fun clearFilters() {
+        AppLogger.d(LOG, "clearFilters()")
+        _state.update { it.copy(filterState = FilterState()) }
+        reFilter()
+    }
+    fun clearSnackbar() { _state.update { it.copy(snackbarMessage = null) } }
 
     // ─── Loading ─────────────────────────────────────────────────────────────
 
-    fun reload() { val a = _state.value.activeAccount ?: return; loadAssets(a, true) }
+    fun reload() {
+        val a = _state.value.activeAccount ?: run {
+            AppLogger.w(LOG, "reload(): no active account")
+            return
+        }
+        AppLogger.i(LOG, "reload(): forcing refresh for account ${a.id}")
+        loadAssets(a, true)
+    }
 
     private fun loadAssets(account: NamedAccount, isRefresh: Boolean) {
+        AppLogger.i(LOG, "loadAssets(): account=${account.id}, provider=${account.providerKey}, isRefresh=$isRefresh")
+
+        // Log everything about the account (never log actual secrets)
+        AppLogger.i(LOG, "  Account details:")
+        AppLogger.i(LOG, "    id                : ${account.id}")
+        AppLogger.i(LOG, "    name              : '${account.name}'")
+        AppLogger.i(LOG, "    providerKey       : ${account.providerKey}")
+        AppLogger.i(LOG, "    cloudName         : '${account.cloudName}'")
+        AppLogger.i(LOG, "    apiKey            : ${AppLogger.mask(account.apiKey)}")
+        AppLogger.i(LOG, "    apiSecret         : ${AppLogger.mask(account.apiSecret)}")
+        AppLogger.i(LOG, "    oauthClientId     : ${AppLogger.mask(account.oauthClientId)}")
+        AppLogger.i(LOG, "    oauthClientSecret : ${AppLogger.mask(account.oauthClientSecret)}")
+        AppLogger.i(LOG, "    oauthAccessToken  : ${AppLogger.mask(account.oauthAccessToken)}")
+        AppLogger.i(LOG, "    oauthRefreshToken : ${AppLogger.mask(account.oauthRefreshToken)}")
+        AppLogger.i(LOG, "    oauthTokenExpiry  : ${account.oauthTokenExpiry}")
+        AppLogger.i(LOG, "    s3Endpoint        : '${account.s3Endpoint}'")
+        AppLogger.i(LOG, "    s3Bucket          : '${account.s3Bucket}'")
+        AppLogger.i(LOG, "    s3AccessKey       : ${AppLogger.mask(account.s3AccessKey)}")
+        AppLogger.i(LOG, "    webDavUrl         : '${account.webDavUrl}'")
+        AppLogger.i(LOG, "    webDavUser        : '${account.webDavUser}'")
+
         viewModelScope.launch {
             if (isRefresh) _state.update { it.copy(isRefreshing = true, error = null) }
             else           _state.update { it.copy(isLoading = true, loadingMessage = "", totalLoaded = 0, error = null) }
 
             val provider = Providers.find(account.providerKey)
+            AppLogger.i(LOG, "  Provider found: key=${provider.key}, authType=${provider.authType}")
+
             val resultFlow = when (provider.authType) {
-                ProviderAuthType.CLOUDINARY     -> cloudRepo.fetchAllAssets(account.toCredentials()!!)
-                ProviderAuthType.S3_COMPATIBLE  -> s3Repo.fetchAllAssets(account)
-                ProviderAuthType.OAUTH_GOOGLE   -> gDriveRepo.fetchAllAssets(account)
-                ProviderAuthType.OAUTH_DROPBOX  -> dropboxRepo.fetchAllAssets(account)
-                ProviderAuthType.OAUTH_ONEDRIVE -> oneDriveRepo.fetchAllAssets(account)
-                ProviderAuthType.OAUTH_BOX      -> boxRepo.fetchAllAssets(account)
-                ProviderAuthType.BASIC_WEBDAV   -> webDavRepo.fetchAllAssets(account)
+                ProviderAuthType.CLOUDINARY     -> {
+                    AppLogger.i(LOG, "  → Routing to CloudinaryRepository")
+                    val creds = account.toCredentials()
+                    if (creds == null) {
+                        AppLogger.e(LOG, "  ✗ toCredentials() returned null! cloudName='${account.cloudName}' apiKey blank=${account.apiKey.isBlank()}")
+                        _state.update { it.copy(isLoading = false, error = "Cloudinary: missing credentials") }
+                        return@launch
+                    }
+                    cloudRepo.fetchAllAssets(creds)
+                }
+                ProviderAuthType.S3_COMPATIBLE  -> {
+                    AppLogger.i(LOG, "  → Routing to S3Repository (endpoint='${account.s3Endpoint}')")
+                    s3Repo.fetchAllAssets(account)
+                }
+                ProviderAuthType.OAUTH_GOOGLE   -> {
+                    val hasToken = account.oauthAccessToken.isNotBlank()
+                    val hasRefresh = account.oauthRefreshToken.isNotBlank()
+                    AppLogger.i(LOG, "  → Routing to GoogleDriveRepository (hasToken=$hasToken, hasRefresh=$hasRefresh)")
+                    gDriveRepo.fetchAllAssets(account)
+                }
+                ProviderAuthType.OAUTH_DROPBOX  -> {
+                    val hasToken = account.oauthAccessToken.isNotBlank()
+                    AppLogger.i(LOG, "  → Routing to DropboxRepository (hasToken=$hasToken)")
+                    dropboxRepo.fetchAllAssets(account)
+                }
+                ProviderAuthType.OAUTH_ONEDRIVE -> {
+                    AppLogger.i(LOG, "  → Routing to OneDriveRepository")
+                    oneDriveRepo.fetchAllAssets(account)
+                }
+                ProviderAuthType.OAUTH_BOX      -> {
+                    AppLogger.i(LOG, "  → Routing to BoxRepository")
+                    boxRepo.fetchAllAssets(account)
+                }
+                ProviderAuthType.BASIC_WEBDAV   -> {
+                    AppLogger.i(LOG, "  → Routing to WebDavDirectRepository (url='${account.webDavUrl}')")
+                    webDavRepo.fetchAllAssets(account)
+                }
             }
 
             resultFlow.collect { result ->
                 when (result) {
-                    is RepositoryResult.Progress -> if (!isRefresh) _state.update {
-                        it.copy(loadingMessage = result.message, totalLoaded = result.loaded)
+                    is RepositoryResult.Progress -> {
+                        AppLogger.v(LOG, "  Progress: ${result.loaded} — '${result.message}'")
+                        if (!isRefresh) _state.update {
+                            it.copy(loadingMessage = result.message, totalLoaded = result.loaded)
+                        }
                     }
-                    is RepositoryResult.Success  -> {
+                    is RepositoryResult.Success -> {
+                        AppLogger.i(LOG, "  ✓ Success: ${result.assets.size} assets received")
+                        AppLogger.d(LOG, "  Asset type breakdown: " +
+                                "images=${result.assets.count { it.isImage }}, " +
+                                "video=${result.assets.count { it.isVideo }}, " +
+                                "audio=${result.assets.count { it.isAudio }}, " +
+                                "pdf=${result.assets.count { it.isPdf }}, " +
+                                "other=${result.assets.count { it.isOther }}")
                         cache.save(account.id, result.assets)
-                        _state.update { it.copy(isLoading = false, isRefreshing = false, allAssets = result.assets, error = null) }
+                        AppLogger.d(LOG, "  Saved ${result.assets.size} assets to cache")
+                        _state.update {
+                            it.copy(isLoading = false, isRefreshing = false, allAssets = result.assets, error = null)
+                        }
                         reFilter()
                     }
-                    is RepositoryResult.Error -> _state.update {
-                        it.copy(isLoading = false, isRefreshing = false, error = result.message)
+                    is RepositoryResult.Error -> {
+                        AppLogger.e(LOG, "  ✗ Error from repository: '${result.message}'")
+                        _state.update {
+                            it.copy(isLoading = false, isRefreshing = false, error = result.message)
+                        }
                     }
                 }
             }
@@ -268,9 +420,9 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
             }}
         }
         list = when (f.fileTypeFilter) {
-            FileTypeFilter.ALL -> list; FileTypeFilter.AUDIO -> list.filter { it.isAudio }
+            FileTypeFilter.ALL   -> list; FileTypeFilter.AUDIO -> list.filter { it.isAudio }
             FileTypeFilter.VIDEO -> list.filter { it.isVideo }; FileTypeFilter.IMAGE -> list.filter { it.isImage }
-            FileTypeFilter.PDF -> list.filter { it.isPdf }; FileTypeFilter.OTHER -> list.filter { it.isOther }
+            FileTypeFilter.PDF   -> list.filter { it.isPdf }; FileTypeFilter.OTHER -> list.filter { it.isOther }
         }
         if (f.isSizeFilterEnabled) list = list.filter { it.sizeInMB >= f.minSizeMB && it.sizeInMB <= f.maxSizeMB }
         if (f.isDurationFilterEnabled) list = list.filter { a ->
@@ -285,6 +437,7 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
             SortBy.SIZE_LARGEST  -> list.sortedByDescending { it.bytes }
             SortBy.SIZE_SMALLEST -> list.sortedBy { it.bytes }
         }
+        AppLogger.d(LOG, "reFilter(): ${st.allAssets.size} total → ${list.size} after filter")
         _state.update { it.copy(filteredAssets = list) }
     }
 
@@ -293,6 +446,7 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleSelectionMode() {
         _state.update {
             val newMode = !it.isSelectionMode
+            AppLogger.d(LOG, "toggleSelectionMode(): $newMode")
             it.copy(isSelectionMode = newMode, selectedAssets = if (!newMode) emptySet() else it.selectedAssets)
         }
     }
@@ -306,10 +460,12 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectAll() {
+        AppLogger.d(LOG, "selectAll()")
         _state.update { it.copy(selectedAssets = it.filteredAssets.map { a -> a.assetId }.toSet()) }
     }
 
     fun clearSelection() {
+        AppLogger.d(LOG, "clearSelection()")
         _state.update { it.copy(selectedAssets = emptySet(), isSelectionMode = false) }
     }
 
@@ -323,12 +479,13 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
         val selectedIds = st.selectedAssets
         if (selectedIds.isEmpty()) return
         val assetsToDelete = st.allAssets.filter { it.assetId in selectedIds }
+        AppLogger.i(LOG, "deleteSelectedAssets(): ${assetsToDelete.size} assets")
 
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true, loadingMessage = "Deleting ${assetsToDelete.size} items…") }
             val provider = Providers.find(account.providerKey)
             var successCount = 0
-            
+
             withContext(Dispatchers.IO) {
                 when (provider.authType) {
                     ProviderAuthType.CLOUDINARY -> {
@@ -347,10 +504,11 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
                             if (dropboxRepo.deleteFile(account, a.publicId)) successCount++
                         }
                     }
-                    else -> {} // Note: Not implemented for other providers yet
+                    else -> AppLogger.w(LOG, "deleteSelectedAssets(): not implemented for ${provider.authType}")
                 }
             }
 
+            AppLogger.i(LOG, "deleteSelectedAssets(): $successCount/${assetsToDelete.size} deleted")
             if (successCount > 0) {
                 _state.update { it.copy(snackbarMessage = "Deleted $successCount items") }
                 loadAssets(account, isRefresh = true)
@@ -367,6 +525,7 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
         val selectedIds = st.selectedAssets
         if (selectedIds.isEmpty()) return
         val assetsToDownload = st.allAssets.filter { it.assetId in selectedIds }
+        AppLogger.i(LOG, "downloadSelectedAssets(): ${assetsToDownload.size} assets")
 
         viewModelScope.launch {
             _state.update { it.copy(snackbarMessage = "Starting download for ${assetsToDownload.size} items…") }
@@ -376,18 +535,16 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
                 for (asset in assetsToDownload) {
                     try {
                         val url = resolveStreamUrl(asset, account)
+                        AppLogger.d(LOG, "  Enqueuing download: ${asset.fileName} → ${AppLogger.redactUrl(url).take(80)}")
                         val req = DownloadManager.Request(Uri.parse(url))
                             .setTitle(asset.fileName)
                             .setDescription("Downloading from CloudVault")
                             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                             .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "CloudVault/${asset.fileName}")
-                            
-                        // Allow media scanner to see it
                         req.allowScanningByMediaScanner()
-                        
                         dm.enqueue(req)
                     } catch (e: Exception) {
-                        e.printStackTrace()
+                        AppLogger.e(LOG, "  Download enqueue failed for ${asset.assetId}", e)
                     }
                 }
             }
@@ -395,5 +552,10 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    override fun onCleared() { super.onCleared(); player?.release(); player = null }
+    override fun onCleared() {
+        AppLogger.i(LOG, "onCleared() — releasing ExoPlayer")
+        super.onCleared()
+        player?.release()
+        player = null
+    }
 }
