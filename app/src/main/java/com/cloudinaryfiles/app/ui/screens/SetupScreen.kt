@@ -296,8 +296,6 @@ fun SetupScreen(
         }
     }
 
-    private fun encode(s: String) = java.net.URLEncoder.encode(s, "UTF-8")
-
     fun saveNonOAuth() {
         val p = selectedProvider; error = null
         when (p.authType) {
