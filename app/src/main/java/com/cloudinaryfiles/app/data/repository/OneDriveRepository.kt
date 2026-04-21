@@ -93,7 +93,7 @@ class OneDriveRepository {
             .apply { if (account.oauthClientSecret.isNotBlank()) add("client_secret", account.oauthClientSecret) }
             .build()
         val resp = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
-        val json = JSONObject(resp.body!!.string())
+        val json = JSONObject(resp.body?.use { it.string() } ?: "")
         if (!resp.isSuccessful) throw Exception(json.optString("error_description", "Token exchange failed"))
         return TokenResult(
             json.getString("access_token"),
@@ -111,14 +111,14 @@ class OneDriveRepository {
             .apply { if (account.oauthClientSecret.isNotBlank()) add("client_secret", account.oauthClientSecret) }
             .build()
         val resp = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
-        val json = JSONObject(resp.body!!.string())
+        val json = JSONObject(resp.body?.use { it.string() } ?: "")
         return json.optString("access_token").ifEmpty { account.oauthAccessToken }
     }
 
     private fun getJson(url: String, token: String): JSONObject {
         val req = Request.Builder().url(url).get().header("Authorization", "Bearer $token").build()
         val resp = client.newCall(req).execute()
-        val body = resp.body!!.string()
+        val body = resp.body?.use { it.string() } ?: ""
         if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}: ${body.take(200)}")
         return JSONObject(body)
     }

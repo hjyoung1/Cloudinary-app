@@ -27,7 +27,8 @@ class MainActivity : ComponentActivity() {
         val prefs = UserPreferences(this)
         // Determine start destination synchronously to skip login flash
         val startDest = runBlocking {
-            if (prefs.credentials.first() != null) "files" else "setup"
+            // credentials is Cloudinary-only; activeAccount works for all providers
+            if (prefs.activeAccount.first() != null) "files" else "setup"
         }
 
         setContent {
@@ -63,7 +64,18 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onAddAccount = {
                                     navController.navigate("add_account")
+                                },
+                                onEditAccount = { accountId ->
+                                    navController.navigate("edit_account/$accountId")
                                 }
+                            )
+                        }
+                        composable("edit_account/{accountId}") { backStackEntry ->
+                            val accountId = backStackEntry.arguments?.getString("accountId") ?: ""
+                            SetupScreen(
+                                onNavigateToFiles = { navController.popBackStack() },
+                                addMode = true,
+                                editAccountId = accountId
                             )
                         }
                     }

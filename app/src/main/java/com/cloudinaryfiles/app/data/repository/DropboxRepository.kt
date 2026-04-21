@@ -46,7 +46,7 @@ class DropboxRepository {
                 val req = Request.Builder().url(url).post(body)
                     .header("Authorization", "Bearer $token").build()
                 val resp = client.newCall(req).execute()
-                val json = JSONObject(resp.body!!.string())
+                val json = JSONObject(resp.body?.use { it.string() } ?: "")
                 if (!resp.isSuccessful) throw Exception(json.optString("error_summary", "API error"))
 
                 val entries = json.getJSONArray("entries")
@@ -67,7 +67,7 @@ class DropboxRepository {
                         .header("Authorization", "Bearer $token")
                         .build()
                     val tmpResp = client.newCall(tmpReq).execute()
-                    val tmpJson = JSONObject(tmpResp.body!!.string())
+                    val tmpJson = JSONObject(tmpResp.body?.use { it.string() } ?: "")
                     val streamUrl = tmpJson.optString("link", "")
 
                     allAssets += CloudinaryAsset(
@@ -114,7 +114,7 @@ class DropboxRepository {
             .add("grant_type", "authorization_code")
             .build()
         val resp = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
-        val json = JSONObject(resp.body!!.string())
+        val json = JSONObject(resp.body?.use { it.string() } ?: "")
         if (!resp.isSuccessful) throw Exception(json.optString("error_description", "Token exchange failed"))
         return TokenResult(
             json.getString("access_token"),
@@ -131,7 +131,7 @@ class DropboxRepository {
             .add("grant_type", "refresh_token")
             .build()
         val resp = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
-        return JSONObject(resp.body!!.string()).getString("access_token")
+        return JSONObject(resp.body?.use { it.string() } ?: "").getString("access_token")
     }
 
     private fun extensionToResourceType(ext: String) = when {

@@ -158,7 +158,7 @@ class S3Repository {
 
         val resp = client.newCall(req).execute()
         if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}: ${resp.body?.string()?.take(200)}")
-        return resp.body!!.string()
+        return resp.body?.use { it.string() } ?: ""
     }
 
     private data class S3Object(

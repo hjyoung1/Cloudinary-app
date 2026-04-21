@@ -44,6 +44,7 @@ import java.time.format.DateTimeFormatter
 fun FilesScreen(
     onNavigateToSetup: () -> Unit,
     onAddAccount: () -> Unit,
+    onEditAccount: (String) -> Unit,
     vm: FilesViewModel = viewModel()
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
@@ -115,7 +116,7 @@ fun FilesScreen(
                 HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp),
                     color = Color.White.copy(0.08f))
 
-                // Active account card
+                // Active account — with Edit button
                 if (activeAccount != null) {
                     Surface(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -140,6 +141,17 @@ fun FilesScreen(
                                     fontWeight = FontWeight.SemiBold, color = Color.White, maxLines = 1)
                                 Text(provider?.label ?: "", style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary)
+                            }
+                            // Edit button for active account
+                            IconButton(
+                                onClick = {
+                                    scope.launch { drawerState.close() }
+                                    onEditAccount(activeAccount.id)
+                                },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(Icons.Outlined.Edit, "Edit account",
+                                    tint = Color.White.copy(0.6f), modifier = Modifier.size(16.dp))
                             }
                             Surface(color = MaterialTheme.colorScheme.primary.copy(0.2f),
                                 shape = RoundedCornerShape(6.dp)) {
@@ -177,7 +189,7 @@ fun FilesScreen(
                 HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp, horizontal = 16.dp),
                     color = Color.White.copy(0.08f))
 
-                // Other accounts
+                // Other accounts — switch + edit
                 if (state.accounts.size > 1) {
                     Text("Switch Account", modifier = Modifier.padding(start = 20.dp, bottom = 6.dp),
                         style = MaterialTheme.typography.labelSmall,
@@ -191,6 +203,19 @@ fun FilesScreen(
                                     Text(acct.displayLabel, style = MaterialTheme.typography.bodyMedium)
                                     Text(acctProvider.label, style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            },
+                            badge = {
+                                IconButton(
+                                    onClick = {
+                                        scope.launch { drawerState.close() }
+                                        onEditAccount(acct.id)
+                                    },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(Icons.Outlined.Edit, "Edit",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(14.dp))
                                 }
                             },
                             selected = false,

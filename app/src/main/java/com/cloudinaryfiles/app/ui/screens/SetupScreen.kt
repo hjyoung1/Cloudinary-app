@@ -54,15 +54,19 @@ import java.util.UUID
 @Composable
 fun SetupScreen(
     onNavigateToFiles: () -> Unit,
-    addMode: Boolean = false
+    addMode: Boolean = false,
+    editAccountId: String? = null   // non-null = edit existing account
 ) {
     val scope   = rememberCoroutineScope()
     val context = LocalContext.current
     val prefs   = remember { UserPreferences(context) }
     val focus   = LocalFocusManager.current
-    val savedCreds by prefs.credentials.collectAsStateWithLifecycle(initialValue = null)
+    val savedAccounts by prefs.accounts.collectAsStateWithLifecycle(initialValue = emptyList())
 
-    LaunchedEffect(savedCreds) { if (!addMode && savedCreds != null) onNavigateToFiles() }
+    // Navigate to files if already connected (only on initial setup screen, not add/edit mode)
+    LaunchedEffect(savedAccounts) {
+        if (!addMode && editAccountId == null && savedAccounts.isNotEmpty()) onNavigateToFiles()
+    }
 
     var selectedProvider by remember { mutableStateOf(Providers.all.first()) }
     var providerMenuOpen by remember { mutableStateOf(false) }
@@ -108,19 +112,45 @@ fun SetupScreen(
     var manualPasteAccount by remember { mutableStateOf<NamedAccount?>(null) }
     var manualPastePort    by remember { mutableStateOf(0) }
 
+    // Pre-fill all fields when editing an existing account
+    LaunchedEffect(editAccountId) {
+        if (editAccountId != null) {
+            val account = prefs.accounts.first().firstOrNull { it.id == editAccountId } ?: return@LaunchedEffect
+            selectedProvider  = Providers.find(account.providerKey)
+            accountName       = account.name
+            cloudName         = account.cloudName
+            apiKey            = account.apiKey
+            apiSecret         = account.apiSecret
+            s3Endpoint        = account.s3Endpoint
+            s3Region          = account.s3Region.ifBlank { "us-east-1" }
+            s3Bucket          = account.s3Bucket
+            s3AccessKey       = account.s3AccessKey
+            s3SecretKey       = account.s3SecretKey
+            s3PathStyle       = account.s3ForcePathStyle
+            oauthClientId     = account.oauthClientId
+            oauthClientSecret = account.oauthClientSecret
+            webDavUrl         = account.webDavUrl
+            webDavUser        = account.webDavUser
+            webDavPass        = account.webDavPass
+        }
+    }
+
     // AppAuth for Dropbox/OneDrive/Box
     val authService = remember { AuthorizationService(context) }
     DisposableEffect(Unit) { onDispose { authService.dispose() } }
     var pendingAccountId by remember { mutableStateOf<String?>(null) }
     var pendingPort by remember { mutableStateOf(0) }
+    // Holds the account locally until auth succeeds — avoids saving orphaned accounts on failure
+    var pendingAppAuthAccount by remember { mutableStateOf<NamedAccount?>(null) }
 
     val oauthLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        val data = result.data ?: return@rememberLauncherForActivityResult
+        val data = result.data ?: run { isLoading = false; return@rememberLauncherForActivityResult }
         val authResponse  = AuthorizationResponse.fromIntent(data)
         val authException = AuthorizationException.fromIntent(data)
         if (authException != null || authResponse == null) {
+            // Auth cancelled or failed — account was NOT saved yet, nothing to clean up
             error = authException?.message ?: "Authorization cancelled"
             isLoading = false
             return@rememberLauncherForActivityResult
@@ -129,10 +159,7 @@ fun SetupScreen(
         scope.launch {
             try {
                 val code  = authResponse.authorizationCode!!
-                val accId = pendingAccountId ?: return@launch
-                val acct = prefs.accounts.first { list -> list.any { it.id == accId } }
-                    .firstOrNull { it.id == accId }
-                    ?: throw Exception("Account not found")
+                val acct  = pendingAppAuthAccount ?: throw Exception("No pending account")
                 val (at, rt, exp) = withContext(Dispatchers.IO) {
                     when (selectedProvider.authType) {
                         ProviderAuthType.OAUTH_DROPBOX  -> { val r = DropboxRepository().exchangeCodeForToken(acct, code);    Triple(r.accessToken, r.refreshToken, r.expiryEpoch) }
@@ -141,12 +168,17 @@ fun SetupScreen(
                         else -> throw Exception("Unknown provider")
                     }
                 }
-                prefs.updateOAuthTokens(accId, at, rt, exp)
-                prefs.setActiveAccount(accId)
+                // ✅ Only save account AFTER token exchange succeeds
+                val finalAccount = acct.copy(oauthAccessToken = at, oauthRefreshToken = rt, oauthTokenExpiry = exp)
+                prefs.saveAccount(finalAccount)
+                prefs.setActiveAccount(finalAccount.id)
                 isLoading = false
+                pendingAppAuthAccount = null
                 onNavigateToFiles()
             } catch (e: Exception) {
+                // Token exchange failed — account was never saved, nothing to clean up
                 error = "Auth failed: ${e.message}"; isLoading = false
+                pendingAppAuthAccount = null
             }
         }
     }
@@ -156,7 +188,7 @@ fun SetupScreen(
         if (oauthClientId.isBlank()) { error = "Client ID is required"; return }
         isLoading = true; loadingMsg = "Starting authorization…"; error = null
         scope.launch {
-            val accId  = "acct_${UUID.randomUUID()}"
+            val accId  = editAccountId ?: "acct_${UUID.randomUUID()}"
             val server = LoopbackOAuthServer()
             val port   = server.start()
             pendingPort = port
@@ -175,8 +207,8 @@ fun SetupScreen(
 
             val authUrl = GoogleDriveRepository.buildAuthUrl(oauthClientId.trim(), port)
 
-            // FIXED LINE HERE 👇 (Changed kotlinx.coroutines.async to scope.async)
-            val codeDeferred = scope.async(Dispatchers.IO) { server.waitForCode() }
+            // BUG FIX: start accept() BEFORE opening browser to eliminate race window
+            val codeDeferred = kotlinx.coroutines.async(Dispatchers.IO) { server.waitForCode() }
 
             // Open in browser
             val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(authUrl))
@@ -247,13 +279,14 @@ fun SetupScreen(
         if (oauthClientId.isBlank()) { error = "Client ID is required"; return }
         isLoading = true; error = null
         scope.launch {
-            val accId = "acct_${UUID.randomUUID()}"
-            pendingAccountId = accId
+            val accId = editAccountId ?: "acct_${UUID.randomUUID()}"
             val account = NamedAccount(
                 id = accId, name = accountName.ifBlank { p.label }, providerKey = p.key,
                 oauthClientId = oauthClientId.trim(), oauthClientSecret = oauthClientSecret.trim()
             )
-            prefs.saveAccount(account)
+            // Store locally — NOT saved to prefs yet; saved only after token exchange succeeds
+            pendingAppAuthAccount = account
+            pendingAccountId = accId
             val serviceConfig = AuthorizationServiceConfiguration(
                 Uri.parse(authEndpoint), Uri.parse(tokenEndpoint)
             )
@@ -261,6 +294,7 @@ fun SetupScreen(
             val reqBuilder = AuthorizationRequest.Builder(
                 serviceConfig, oauthClientId.trim(), ResponseTypeValues.CODE, redirectUri
             ).setScope(scopes)
+                .setCodeVerifier(null)  // ← PKCE disabled: our manual token exchange has no code_verifier
             if (p.authType == ProviderAuthType.OAUTH_DROPBOX)
                 reqBuilder.setAdditionalParameters(mapOf("token_access_type" to "offline"))
             val authIntent = authService.getAuthorizationRequestIntent(reqBuilder.build())
@@ -286,7 +320,8 @@ fun SetupScreen(
                 }
             }
             val account = NamedAccount(
-                id = "acct_${UUID.randomUUID()}", name = name, providerKey = p.key,
+                id = editAccountId ?: "acct_${UUID.randomUUID()}",  // preserve id when editing
+                name = name, providerKey = p.key,
                 cloudName = cloudName.trim(), apiKey = apiKey.trim(), apiSecret = apiSecret.trim(),
                 s3Endpoint = s3Endpoint.trim().ifBlank { p.s3Endpoint },
                 s3Region = s3Region.trim(), s3Bucket = s3Bucket.trim(),
@@ -327,8 +362,11 @@ fun SetupScreen(
             Spacer(Modifier.height(12.dp))
             Text("CloudVault", style = MaterialTheme.typography.headlineLarge,
                 color = Color.White, fontWeight = FontWeight.ExtraBold)
-            Text(if (addMode) "Add another account" else "Connect your cloud storage",
-                style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(0.6f),
+            Text(when {
+                editAccountId != null -> "Edit account"
+                addMode -> "Add another account"
+                else -> "Connect your cloud storage"
+            }, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(0.6f),
                 textAlign = TextAlign.Center)
             Spacer(Modifier.height(24.dp))
 
@@ -383,7 +421,11 @@ fun SetupScreen(
                                         }) else null,
                                         onClick = {
                                             selectedProvider = provider; providerMenuOpen = false; error = null; showOAuthHint = true
-                                            if (provider.s3Endpoint.isNotBlank() && s3Endpoint.isBlank()) s3Endpoint = provider.s3Endpoint
+                                            // Always reset S3 endpoint/region to the new provider's defaults
+                                            s3Endpoint = provider.s3Endpoint
+                                            s3Region   = provider.s3Region.ifBlank { "us-east-1" }
+                                            // Clear OAuth credentials on provider switch to avoid confusion
+                                            oauthClientId = ""; oauthClientSecret = ""
                                         }
                                     )
                                 }

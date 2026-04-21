@@ -83,7 +83,7 @@ class WebDavDirectRepository {
         auth?.let { reqBuilder.header("Authorization", it) }
         val resp = client.newCall(reqBuilder.build()).execute()
         if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}: ${resp.message}")
-        return parseMultiStatus(resp.body!!.string())
+        return parseMultiStatus(resp.body?.use { it.string() } ?: "")
     }
 
     private fun parseMultiStatus(xml: String): List<DavEntry> {

@@ -220,15 +220,10 @@ fun FileCard(
 private fun WaveformDecoration(isPlaying: Boolean) {
     val anim = rememberInfiniteTransition(label = "wave")
     val phase by anim.animateFloat(
-        initialValue = 0f, 
-        targetValue = if (isPlaying) 1f else 0f,
-        // We added <Float> right here 👇
-        animationSpec = infiniteRepeatable<Float>(
-            animation = tween(1200, easing = LinearEasing)
-        ),
+        initialValue = 0f, targetValue = if (isPlaying) 1f else 0f,
+        animationSpec = if (isPlaying) infiniteRepeatable(tween(1200, easing = LinearEasing)) else tween(0),
         label = "phase"
     )
-
     Row(
         modifier = Modifier.fillMaxSize(),
         horizontalArrangement = Arrangement.SpaceEvenly,

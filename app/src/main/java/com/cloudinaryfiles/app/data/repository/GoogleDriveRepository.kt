@@ -105,7 +105,7 @@ class GoogleDriveRepository {
             .add("grant_type", "authorization_code")
             .build()
         val resp = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
-        val json = JSONObject(resp.body!!.string())
+        val json = JSONObject(resp.body?.use { it.string() } ?: "")
         if (!resp.isSuccessful) throw Exception(json.optString("error_description",
             json.optString("error", "Token exchange failed")))
         return TokenResult(
@@ -123,13 +123,13 @@ class GoogleDriveRepository {
             .add("grant_type", "refresh_token")
             .build()
         val resp = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
-        return JSONObject(resp.body!!.string()).getString("access_token")
+        return JSONObject(resp.body?.use { it.string() } ?: "").getString("access_token")
     }
 
     private fun getJson(url: String, token: String): JSONObject {
         val req = Request.Builder().url(url).get().header("Authorization", "Bearer $token").build()
         val resp = client.newCall(req).execute()
-        val body = resp.body!!.string()
+        val body = resp.body?.use { it.string() } ?: ""
         if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}: ${body.take(200)}")
         return JSONObject(body)
     }
