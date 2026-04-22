@@ -109,6 +109,12 @@ class DropboxRepository {
                 for (i in 0 until entries.length()) {
                     val entry = entries.getJSONObject(i)
                     if (entry.optString(".tag") != "file") { skippedFolders++; continue }
+                    // Apply folder exclusion
+                    val entryPath = entry.optString("path_lower", "")
+                    if (account.excludedFolders.isNotEmpty() &&
+                        account.excludedFolders.any { excl -> entryPath.startsWith(excl.lowercase()) }) {
+                        skippedFolders++; continue
+                    }
 
                     val name     = entry.getString("name")
                     val path     = entry.getString("path_lower")

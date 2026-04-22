@@ -40,6 +40,7 @@ import com.cloudinaryfiles.app.data.repository.LoopbackOAuthServer
 import com.cloudinaryfiles.app.data.repository.OneDriveRepository
 import com.cloudinaryfiles.app.data.repository.PkceUtil
 import com.cloudinaryfiles.app.ui.theme.*
+import com.cloudinaryfiles.app.ui.components.ExcludedFoldersSection
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
@@ -100,6 +101,9 @@ fun SetupScreen(
     var showWdPass     by remember { mutableStateOf(false) }
     var showApiKey     by remember { mutableStateOf(false) }
 
+    // Folder exclusions
+    var excludedFolders by remember { mutableStateOf<List<String>>(emptyList()) }
+
     var isLoading by remember { mutableStateOf(false) }
     var loadingMsg by remember { mutableStateOf("") }
     var error     by remember { mutableStateOf<String?>(null) }
@@ -117,6 +121,7 @@ fun SetupScreen(
             selectedProvider  = Providers.find(account.providerKey)
             accountName       = account.name
             cloudName         = account.cloudName
+            excludedFolders   = account.excludedFolders
             apiKey            = account.apiKey
             apiSecret         = account.apiSecret
             s3Endpoint        = account.s3Endpoint
@@ -180,7 +185,8 @@ fun SetupScreen(
                     oauthAccessToken  = result.accessToken,
                     oauthRefreshToken = result.refreshToken,
                     oauthTokenExpiry  = result.expiryEpoch
-                )
+                ,
+                    excludedFolders = excludedFolders)
                 prefs.saveAccount(finalAccount)
                 prefs.setActiveAccount(accId)
                 isLoading = false
@@ -290,7 +296,8 @@ fun SetupScreen(
                     oauthAccessToken  = result.first,
                     oauthRefreshToken = result.second,
                     oauthTokenExpiry  = result.third
-                )
+                ,
+                    excludedFolders = excludedFolders)
                 prefs.saveAccount(finalAccount)
                 prefs.setActiveAccount(accId)
                 isLoading = false; loadingMsg = ""
@@ -329,7 +336,8 @@ fun SetupScreen(
                 s3AccessKey = s3AccessKey.trim(), s3SecretKey = s3SecretKey,
                 s3ForcePathStyle = s3PathStyle,
                 webDavUrl = webDavUrl.trim().trimEnd('/'),
-                webDavUser = webDavUser.trim(), webDavPass = webDavPass
+                webDavUser = webDavUser.trim(), webDavPass = webDavPass,
+                excludedFolders = excludedFolders
             )
             prefs.saveAccount(account)
             prefs.setActiveAccount(account.id)
@@ -731,6 +739,14 @@ fun SetupScreen(
                 }
             }
 
+            // Folder exclusion (only relevant for OAuth + S3 + WebDAV — not Cloudinary which uses search API)
+            if (selectedProvider.authType != com.cloudinaryfiles.app.data.model.ProviderAuthType.CLOUDINARY) {
+                Spacer(Modifier.height(16.dp))
+                ExcludedFoldersSection(
+                    excludedFolders = excludedFolders,
+                    onFoldersChanged = { excludedFolders = it }
+                )
+            }
             Spacer(Modifier.height(16.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.Shield, null, tint = Color.White.copy(0.35f), modifier = Modifier.size(13.dp))

@@ -38,6 +38,7 @@ import com.cloudinaryfiles.app.data.model.Providers
 import com.cloudinaryfiles.app.ui.components.AudioPlayerBar
 import com.cloudinaryfiles.app.ui.components.FileCard
 import com.cloudinaryfiles.app.ui.components.FilterBottomSheet
+import com.cloudinaryfiles.app.ui.screens.FileViewerScreen
 import com.cloudinaryfiles.app.ui.components.SelectionToolbar
 import com.cloudinaryfiles.app.ui.components.formatDurationSec
 import com.cloudinaryfiles.app.ui.theme.*
@@ -383,7 +384,12 @@ fun FilesScreen(
                                         asset = asset,
                                         isPlaying = state.currentlyPlayingId == asset.assetId && state.isPlaying,
                                         isSelected = state.selectedAssets.contains(asset.assetId),
+                                        isSelectionMode = state.isSelectionMode,
                                         onPlayClick = { vm.togglePlay(asset) },
+                                        onOpen = {
+                                            if (asset.isAudio) vm.togglePlay(asset)
+                                            else vm.openFile(asset)
+                                        },
                                         onCopyLink = { vm.copyLink(asset) },
                                         onShare = {
                                             val intent = Intent(Intent.ACTION_SEND).apply {
@@ -394,11 +400,15 @@ fun FilesScreen(
                                             context.startActivity(Intent.createChooser(intent, "Share file"))
                                         },
                                         onInfo = { vm.showInfo(asset) },
+                                        onSelectToggle = {
+                                            if (!state.isSelectionMode) vm.toggleSelectionMode()
+                                            vm.toggleSelection(asset.assetId)
+                                        },
                                         onClick = {
                                             if (state.isSelectionMode) {
                                                 vm.toggleSelection(asset.assetId)
-                                            } else {
-                                                vm.showInfo(asset)
+                                            } else if (!asset.isAudio) {
+                                                vm.openFile(asset)
                                             }
                                         },
                                         onLongPress = {
@@ -413,6 +423,14 @@ fun FilesScreen(
                     }
                 }
 
+
+            // ── File Viewer overlay ─────────────────────────────────────────
+            if (state.viewingAsset != null) {
+                FileViewerScreen(
+                    asset = state.viewingAsset!!,
+                    onDismiss = { vm.dismissViewer() }
+                )
+            }
                 // Mini player
                 val playingAsset = state.currentlyPlayingId?.let { id ->
                     state.allAssets.firstOrNull { it.assetId == id }

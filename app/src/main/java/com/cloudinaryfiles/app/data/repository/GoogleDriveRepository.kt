@@ -102,6 +102,11 @@ class GoogleDriveRepository {
                         skippedGoogleDocs++
                         continue
                     }
+                    // Apply folder exclusion filter
+                    val fileName = f.optString("name", "")
+                    if (account.excludedFolders.any { excl ->
+                        excl.isNotBlank() && (fileName.startsWith(excl, ignoreCase = true) ||
+                        f.optString("id","").contains(excl, ignoreCase = true)) }) continue
                     val id      = f.getString("id")
                     val name    = f.getString("name")
                     val ext     = name.substringAfterLast(".", "").lowercase()

@@ -39,6 +39,7 @@ data class FilesUiState(
     val isPlaying: Boolean = false,
     val isFilterSheetOpen: Boolean = false,
     val infoAsset: CloudinaryAsset? = null,
+    val viewingAsset: CloudinaryAsset? = null,
     val snackbarMessage: String? = null,
     val totalLoaded: Int = 0,
     val accounts: List<NamedAccount> = emptyList(),
@@ -255,6 +256,8 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
 
     fun showInfo(asset: CloudinaryAsset)  { _state.update { it.copy(infoAsset = asset) } }
     fun dismissInfo()                     { _state.update { it.copy(infoAsset = null) } }
+    fun openFile(asset: CloudinaryAsset)   { _state.update { it.copy(viewingAsset = asset) } }
+    fun dismissViewer()                    { _state.update { it.copy(viewingAsset = null) } }
     fun openFilterSheet()                 { _state.update { it.copy(isFilterSheetOpen = true) } }
     fun closeFilterSheet()                { _state.update { it.copy(isFilterSheetOpen = false) } }
     fun applyFilter(f: FilterState) {

@@ -39,7 +39,9 @@ data class NamedAccount(
     // ── WebDAV / basic auth ─────────────────────────────────────────────────
     val webDavUrl: String = "",          // https://cloud.myhost.com/remote.php/dav/files/user
     val webDavUser: String = "",
-    val webDavPass: String = ""
+    val webDavPass: String = "",
+    // Folder paths/prefixes to exclude from listing (empty = include all)
+    val excludedFolders: List<String> = emptyList()
 ) {
     val isCloudinary get() = providerKey == "cloudinary"
 

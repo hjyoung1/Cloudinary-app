@@ -67,7 +67,10 @@ class S3Repository {
                 val (objects, nextToken) = parseListObjectsV2(xml)
                 AppLogger.i(LOG, "  page $pageNum: ${objects.size} objects, nextToken=${nextToken?.take(20)?.plus("…") ?: "null"}")
 
-                allAssets += objects.map { obj ->
+                val excl = account.excludedFolders.map { it.trimStart('/').lowercase() }
+                allAssets += objects.filter { obj ->
+                    excl.isEmpty() || excl.none { e -> obj.key.lowercase().startsWith(e) }
+                }.map { obj ->
                     AppLogger.v(LOG, "    obj: key=${obj.key} size=${obj.size} modified=${obj.lastModified}")
                     assetFromS3Object(obj, account, baseUrl)
                 }
