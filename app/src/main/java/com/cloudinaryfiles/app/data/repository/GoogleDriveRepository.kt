@@ -3,7 +3,9 @@ package com.cloudinaryfiles.app.data.repository
 import com.cloudinaryfiles.app.AppLogger
 import com.cloudinaryfiles.app.data.model.CloudinaryAsset
 import com.cloudinaryfiles.app.data.preferences.NamedAccount
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.flow
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
@@ -175,6 +177,7 @@ class GoogleDriveRepository {
             emit(RepositoryResult.Error(msg))
         }
     }
+    .flowOn(Dispatchers.IO)
 
     fun freshToken(account: NamedAccount): String? {
         AppLogger.d(LOG, "freshToken(): checking token validity…")

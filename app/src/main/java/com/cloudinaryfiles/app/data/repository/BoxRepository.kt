@@ -3,7 +3,9 @@ package com.cloudinaryfiles.app.data.repository
 import com.cloudinaryfiles.app.AppLogger
 import com.cloudinaryfiles.app.data.model.CloudinaryAsset
 import com.cloudinaryfiles.app.data.preferences.NamedAccount
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.flow
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
@@ -100,6 +102,7 @@ class BoxRepository {
             emit(RepositoryResult.Error("Box: ${e.message}"))
         }
     }
+    .flowOn(Dispatchers.IO)
 
     data class TokenResult(val accessToken: String, val refreshToken: String, val expiryEpoch: Long)
 

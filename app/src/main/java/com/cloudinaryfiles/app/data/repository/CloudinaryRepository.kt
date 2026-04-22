@@ -6,7 +6,9 @@ import com.cloudinaryfiles.app.data.api.CloudinaryApi
 import com.cloudinaryfiles.app.data.model.CloudinaryAsset
 import com.cloudinaryfiles.app.data.model.CloudinaryCredentials
 import com.cloudinaryfiles.app.data.model.CloudinarySearchRequest
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.flow
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -200,7 +202,7 @@ class CloudinaryRepository {
         AppLogger.i(LOG, "══ fetchAllAssets SUCCESS — ${all.size} total assets ══")
         emit(RepositoryResult.Success(all))
     }
-
+    .flowOn(Dispatchers.IO)
     suspend fun deleteAssets(credentials: CloudinaryCredentials, assets: List<CloudinaryAsset>): Boolean {
         AppLogger.i(LOG, "deleteAssets(): ${assets.size} assets to delete")
         val api = buildApi(credentials)

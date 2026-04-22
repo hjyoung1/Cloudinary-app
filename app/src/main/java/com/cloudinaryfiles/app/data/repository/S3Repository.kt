@@ -6,6 +6,7 @@ import com.cloudinaryfiles.app.data.preferences.NamedAccount
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -94,6 +95,7 @@ class S3Repository {
             emit(RepositoryResult.Error("S3 error: ${e.message}"))
         }
     }
+    .flowOn(Dispatchers.IO)
 
     fun presignedGetUrl(account: NamedAccount, objectKey: String): String {
         AppLogger.d(LOG, "presignedGetUrl(): key=$objectKey region=${account.s3Region}")
