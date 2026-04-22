@@ -102,7 +102,7 @@ class WebDavDirectRepository {
             }
             emit(RepositoryResult.Error("WebDAV: ${e.message}"))
         }
-    }
+    }.flowOn(Dispatchers.IO) // <--- FIXED: The missing line was attached properly here!
 
     private fun buildStreamUrl(base: String, href: String, account: NamedAccount): String {
         val url = if (href.startsWith("http")) href else "$base$href"
@@ -218,6 +218,5 @@ class WebDavDirectRepository {
         mime.startsWith("video") || ext in setOf("mp4","mov","avi","mkv","webm")       -> "video"
         mime.startsWith("image") -> "image"
         else -> "raw"
-    }
-    .flowOn(Dispatchers.IO)
+    } // <--- FIXED: The broken line was removed from here
 }
