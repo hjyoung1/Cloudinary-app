@@ -41,8 +41,11 @@ data class NamedAccount(
     val webDavUser: String = "",
     val webDavPass: String = "",
     // Folder paths/prefixes to exclude from listing (empty = include all)
-    val excludedFolders: List<String> = emptyList()
+    val excludedFolders: List<String>? = null   // nullable so Gson missing field → null, not crash
 ) {
+    /** Always safe to use — returns empty list when field missing from old stored data */
+    val safeExcludedFolders: List<String> get() = excludedFolders ?: emptyList()
+
     val isCloudinary get() = providerKey == "cloudinary"
 
     fun toCredentials(): CloudinaryCredentials? =

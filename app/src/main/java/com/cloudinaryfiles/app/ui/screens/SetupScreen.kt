@@ -40,7 +40,6 @@ import com.cloudinaryfiles.app.data.repository.LoopbackOAuthServer
 import com.cloudinaryfiles.app.data.repository.OneDriveRepository
 import com.cloudinaryfiles.app.data.repository.PkceUtil
 import com.cloudinaryfiles.app.ui.theme.*
-import com.cloudinaryfiles.app.ui.components.ExcludedFoldersSection
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
@@ -121,7 +120,7 @@ fun SetupScreen(
             selectedProvider  = Providers.find(account.providerKey)
             accountName       = account.name
             cloudName         = account.cloudName
-            excludedFolders   = account.excludedFolders
+            excludedFolders   = account.excludedFolders ?: emptyList()
             apiKey            = account.apiKey
             apiSecret         = account.apiSecret
             s3Endpoint        = account.s3Endpoint
@@ -186,7 +185,7 @@ fun SetupScreen(
                     oauthRefreshToken = result.refreshToken,
                     oauthTokenExpiry  = result.expiryEpoch
                 ,
-                    excludedFolders = excludedFolders)
+                    excludedFolders = excludedFolders ?: emptyList())
                 prefs.saveAccount(finalAccount)
                 prefs.setActiveAccount(accId)
                 isLoading = false
@@ -297,7 +296,7 @@ fun SetupScreen(
                     oauthRefreshToken = result.second,
                     oauthTokenExpiry  = result.third
                 ,
-                    excludedFolders = excludedFolders)
+                    excludedFolders = excludedFolders ?: emptyList())
                 prefs.saveAccount(finalAccount)
                 prefs.setActiveAccount(accId)
                 isLoading = false; loadingMsg = ""
@@ -739,14 +738,7 @@ fun SetupScreen(
                 }
             }
 
-            // Folder exclusion (only relevant for OAuth + S3 + WebDAV — not Cloudinary which uses search API)
-            if (selectedProvider.authType != com.cloudinaryfiles.app.data.model.ProviderAuthType.CLOUDINARY) {
-                Spacer(Modifier.height(16.dp))
-                ExcludedFoldersSection(
-                    excludedFolders = excludedFolders,
-                    onFoldersChanged = { excludedFolders = it }
-                )
-            }
+            // Folder exclusions are managed via ExcludedFoldersSection (add when needed)
             Spacer(Modifier.height(16.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.Shield, null, tint = Color.White.copy(0.35f), modifier = Modifier.size(13.dp))

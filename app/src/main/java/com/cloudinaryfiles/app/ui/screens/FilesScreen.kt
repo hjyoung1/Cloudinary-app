@@ -3,6 +3,7 @@ package com.cloudinaryfiles.app.ui.screens
 import android.content.Intent
 import androidx.core.content.FileProvider
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -75,6 +76,14 @@ fun FilesScreen(
         activeAccount?.providerKey?.let { Providers.find(it) }
     }
     val isAudioPlaying = state.currentlyPlayingId != null
+
+    // Handle back: dismiss viewer → clear selection → then default (exit app)
+    BackHandler(enabled = state.viewingAsset != null || state.isSelectionMode) {
+        when {
+            state.viewingAsset != null -> vm.dismissViewer()
+            state.isSelectionMode      -> vm.clearSelection()
+        }
+    }
 
     // Compute stats for drawer
     val totalSize = remember(state.allAssets) {
@@ -428,6 +437,7 @@ fun FilesScreen(
             if (state.viewingAsset != null) {
                 FileViewerScreen(
                     asset = state.viewingAsset!!,
+                    resolvedUrl = state.viewingUrl,
                     onDismiss = { vm.dismissViewer() }
                 )
             }

@@ -111,8 +111,8 @@ class DropboxRepository {
                     if (entry.optString(".tag") != "file") { skippedFolders++; continue }
                     // Apply folder exclusion
                     val entryPath = entry.optString("path_lower", "")
-                    if (account.excludedFolders.isNotEmpty() &&
-                        account.excludedFolders.any { excl -> entryPath.startsWith(excl.lowercase()) }) {
+                    if (account.safeExcludedFolders.isNotEmpty() &&
+                        account.safeExcludedFolders.any { excl -> entryPath.startsWith(excl.lowercase()) }) {
                         skippedFolders++; continue
                     }
 

@@ -104,7 +104,7 @@ class GoogleDriveRepository {
                     }
                     // Apply folder exclusion filter
                     val fileName = f.optString("name", "")
-                    if (account.excludedFolders.any { excl ->
+                    if (account.safeExcludedFolders.any { excl ->
                         excl.isNotBlank() && (fileName.startsWith(excl, ignoreCase = true) ||
                         f.optString("id","").contains(excl, ignoreCase = true)) }) continue
                     val id      = f.getString("id")

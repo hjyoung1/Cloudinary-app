@@ -40,6 +40,7 @@ data class FilesUiState(
     val isFilterSheetOpen: Boolean = false,
     val infoAsset: CloudinaryAsset? = null,
     val viewingAsset: CloudinaryAsset? = null,
+    val viewingUrl: String? = null,      // Resolved stream URL for the viewer
     val snackbarMessage: String? = null,
     val totalLoaded: Int = 0,
     val accounts: List<NamedAccount> = emptyList(),
@@ -256,8 +257,21 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
 
     fun showInfo(asset: CloudinaryAsset)  { _state.update { it.copy(infoAsset = asset) } }
     fun dismissInfo()                     { _state.update { it.copy(infoAsset = null) } }
-    fun openFile(asset: CloudinaryAsset)   { _state.update { it.copy(viewingAsset = asset) } }
-    fun dismissViewer()                    { _state.update { it.copy(viewingAsset = null) } }
+    fun openFile(asset: CloudinaryAsset) {
+        val account = _state.value.activeAccount
+        if (account == null) {
+            _state.update { it.copy(viewingAsset = asset, viewingUrl = asset.secureUrl) }
+            return
+        }
+        // Resolve a fresh authenticated URL (critical for GDrive, S3)
+        viewModelScope.launch {
+            val resolved = withContext(Dispatchers.IO) {
+                try { resolveStreamUrl(asset, account) } catch (_: Exception) { asset.secureUrl }
+            }
+            _state.update { it.copy(viewingAsset = asset, viewingUrl = resolved) }
+        }
+    }
+    fun dismissViewer()                    { _state.update { it.copy(viewingAsset = null, viewingUrl = null) } }
     fun openFilterSheet()                 { _state.update { it.copy(isFilterSheetOpen = true) } }
     fun closeFilterSheet()                { _state.update { it.copy(isFilterSheetOpen = false) } }
     fun applyFilter(f: FilterState) {
