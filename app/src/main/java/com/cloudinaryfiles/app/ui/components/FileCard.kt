@@ -334,15 +334,18 @@ fun FileCard(
             }
 
             // Selected overlay (subtle tint — border already shows selection)
-            val overlayColor by animateColorAsState(
-                targetValue = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent,
-                label = "overlayColor"
+            val overlayAlpha by animateFloatAsState(
+                targetValue = if (isSelected) 0.08f else 0f,
+                animationSpec = tween(200),
+                label = "selectionOverlay"
             )
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(overlayColor)
-            )
+            if (overlayAlpha > 0f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = overlayAlpha))
+                )
+            }
         }
     }
 }
@@ -417,10 +420,6 @@ fun formatDurationSec(seconds: Double): String {
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
 
-private fun formatDate(raw: String): String = try {
-    OffsetDateTime.parse(raw, DateTimeFormatter.ISO_OFFSET_DATE_TIME)
-        .format(DateTimeFormatter.ofPattern("MMM d, yyyy"))
-} catch (_: Exception) { raw.take(10) }
 private fun formatDate(raw: String): String = try {
     OffsetDateTime.parse(raw, DateTimeFormatter.ISO_OFFSET_DATE_TIME)
         .format(DateTimeFormatter.ofPattern("MMM d, yyyy"))
