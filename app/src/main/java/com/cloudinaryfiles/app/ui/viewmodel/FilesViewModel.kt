@@ -14,6 +14,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.cloudinaryfiles.app.AppLogger
 import com.cloudinaryfiles.app.data.cache.AssetCache
+import com.cloudinaryfiles.app.data.model.CloudinaryAsset
 import com.cloudinaryfiles.app.data.model.*
 import com.cloudinaryfiles.app.data.preferences.NamedAccount
 import com.cloudinaryfiles.app.data.preferences.UserPreferences
@@ -51,7 +52,10 @@ data class FilesUiState(
     val isGridView: Boolean = true,
     // Inline video playback (video plays in the card before going full-screen)
     val inlineVideoId: String? = null,
-    val inlineVideoUrl: String? = null
+    val inlineVideoUrl: String? = null,
+    val inlineVideoHeaders: Map<String, String>? = null,
+    val viewingHeaders: Map<String, String>? = null,
+    val accountHeaders: Map<String, String>? = null  // Auth headers for current account (e.g. GDrive Bearer)
 )
 
 class FilesViewModel(application: Application) : AndroidViewModel(application) {
@@ -108,7 +112,8 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
                     val cached = cache.load(account.id)
                     if (!cached.isNullOrEmpty()) {
                         AppLogger.i(LOG, "Cache HIT — ${cached.size} assets restored from disk cache")
-                        _state.update { it.copy(allAssets = cached, isLoading = false) }
+                        val hdrs = try { resolveAccountHeaders(account) } catch (_: Exception) { null }
+                        _state.update { it.copy(allAssets = cached, isLoading = false, accountHeaders = hdrs) }
                         reFilter()
                     } else {
                         AppLogger.i(LOG, "Cache MISS — fetching from provider…")
@@ -212,15 +217,18 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
                 AppLogger.d(LOG, "  S3 presigned URL generated")
                 url
             }
-            ProviderAuthType.OAUTH_GOOGLE -> {
-                val token = gDriveRepo.freshToken(account) ?: asset.secureUrl
-                val url = "https://www.googleapis.com/drive/v3/files/${asset.publicId}?alt=media&access_token=$token"
-                AppLogger.d(LOG, "  Google Drive stream URL built (has token=${token.isNotBlank()})")
-                url
+            ProviderAuthType.OAUTH_GOOGLE   -> {
+                val token = gDriveRepo.freshToken(account)
+                AppLogger.d(LOG, "  Google Drive stream URL built (has token=${token?.isNotBlank()})")
+                "https://www.googleapis.com/drive/v3/files/${asset.publicId}?alt=media"
             }
-            ProviderAuthType.OAUTH_DROPBOX -> {
-                AppLogger.d(LOG, "  Dropbox: returning stored temp link (may be expired after 4h): ${asset.secureUrl.take(60)}")
-                asset.secureUrl
+            ProviderAuthType.OAUTH_DROPBOX  -> {
+                AppLogger.d(LOG, "  Dropbox: fetching fresh temp link for: ${asset.publicId.take(60)}")
+                val freshLink = dropboxRepo.getFreshLink(account, asset.publicId)
+                if (freshLink.isNotBlank()) freshLink else {
+                    AppLogger.w(LOG, "  Dropbox: getFreshLink returned empty, falling back")
+                    asset.secureUrl
+                }
             }
             ProviderAuthType.OAUTH_ONEDRIVE, ProviderAuthType.OAUTH_BOX -> {
                 AppLogger.d(LOG, "  ${provider.authType}: returning pre-auth download URL")
@@ -263,34 +271,37 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
     fun openFile(asset: CloudinaryAsset) {
         val account = _state.value.activeAccount
         if (account == null) {
-            _state.update { it.copy(viewingAsset = asset, viewingUrl = asset.secureUrl) }
+            _state.update { it.copy(viewingAsset = asset, viewingUrl = asset.secureUrl, viewingHeaders = null) }
             return
         }
-        // Resolve a fresh authenticated URL (critical for GDrive, S3)
         viewModelScope.launch {
-            val resolved = withContext(Dispatchers.IO) {
-                try { resolveStreamUrl(asset, account) } catch (_: Exception) { asset.secureUrl }
+            val (resolved, headers) = withContext(Dispatchers.IO) {
+                val url = try { resolveStreamUrl(asset, account) } catch (_: Exception) { asset.secureUrl }
+                val hdrs = try { resolveAuthHeaders(asset, account) } catch (_: Exception) { null }
+                url to hdrs
             }
-            _state.update { it.copy(viewingAsset = asset, viewingUrl = resolved) }
+            _state.update { it.copy(viewingAsset = asset, viewingUrl = resolved, viewingHeaders = headers) }
         }
     }
     fun dismissViewer()                    { _state.update { it.copy(viewingAsset = null, viewingUrl = null) } }
 
-    /** Start inline video in the card — resolves auth URL first */
+    /** Start inline video in the card — resolves auth URL and headers first */
     fun setInlineVideo(asset: CloudinaryAsset) {
         val account = _state.value.activeAccount ?: run {
-            _state.update { it.copy(inlineVideoId = asset.assetId, inlineVideoUrl = asset.secureUrl) }
+            _state.update { it.copy(inlineVideoId = asset.assetId, inlineVideoUrl = asset.secureUrl, inlineVideoHeaders = null) }
             return
         }
         viewModelScope.launch {
-            val resolved = withContext(Dispatchers.IO) {
-                try { resolveStreamUrl(asset, account) } catch (_: Exception) { asset.secureUrl }
+            val (resolved, headers) = withContext(Dispatchers.IO) {
+                val url = try { resolveStreamUrl(asset, account) } catch (_: Exception) { asset.secureUrl }
+                val hdrs = try { resolveAuthHeaders(asset, account) } catch (_: Exception) { null }
+                url to hdrs
             }
-            _state.update { it.copy(inlineVideoId = asset.assetId, inlineVideoUrl = resolved) }
+            _state.update { it.copy(inlineVideoId = asset.assetId, inlineVideoUrl = resolved, inlineVideoHeaders = headers) }
         }
     }
 
-    fun clearInlineVideo() { _state.update { it.copy(inlineVideoId = null, inlineVideoUrl = null) } }
+    fun clearInlineVideo() { _state.update { it.copy(inlineVideoId = null, inlineVideoUrl = null, inlineVideoHeaders = null) } }
     fun openFilterSheet()                 { _state.update { it.copy(isFilterSheetOpen = true) } }
     fun closeFilterSheet()                { _state.update { it.copy(isFilterSheetOpen = false) } }
     fun applyFilter(f: FilterState) {
@@ -403,8 +414,10 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
                                 "other=${result.assets.count { it.isOther }}")
                         cache.save(account.id, result.assets)
                         AppLogger.d(LOG, "  Saved ${result.assets.size} assets to cache")
+                        // Pre-fetch auth headers for accounts that need them (GDrive token, WebDAV basic)
+                        val hdrs = try { resolveAccountHeaders(account) } catch (_: Exception) { null }
                         _state.update {
-                            it.copy(isLoading = false, isRefreshing = false, allAssets = result.assets, error = null)
+                            it.copy(isLoading = false, isRefreshing = false, allAssets = result.assets, error = null, accountHeaders = hdrs)
                         }
                         reFilter()
                     }
@@ -585,6 +598,27 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             clearSelection()
+        }
+    }
+
+    /** Resolve Authorization headers needed to stream/view an asset. */
+    private suspend fun resolveAuthHeaders(asset: CloudinaryAsset, account: NamedAccount): Map<String, String>? =
+        resolveAccountHeaders(account)
+
+    /** Resolve Authorization headers for an account (not asset-specific). */
+    private suspend fun resolveAccountHeaders(account: NamedAccount): Map<String, String>? {
+        return when (Providers.find(account.providerKey).authType) {
+            ProviderAuthType.OAUTH_GOOGLE -> {
+                val token = withContext(Dispatchers.IO) { gDriveRepo.freshToken(account) }
+                    ?: return null
+                mapOf("Authorization" to "Bearer $token")
+            }
+            ProviderAuthType.BASIC_WEBDAV -> {
+                val creds = "${account.webDavUser}:${account.webDavPass}"
+                val encoded = android.util.Base64.encodeToString(creds.toByteArray(), android.util.Base64.NO_WRAP)
+                mapOf("Authorization" to "Basic $encoded")
+            }
+            else -> null
         }
     }
 

@@ -60,6 +60,7 @@ import java.net.URL
 fun FileViewerScreen(
     asset: CloudinaryAsset,
     resolvedUrl: String?,
+    resolvedHeaders: Map<String, String>? = null,
     onDismiss: () -> Unit
 ) {
     BackHandler(enabled = true) { onDismiss() }
@@ -73,8 +74,8 @@ fun FileViewerScreen(
             .background(Color.Black)
     ) {
         when {
-            asset.isImage     -> ImageViewer(url = url, asset = asset, onDismiss = onDismiss)
-            asset.isVideo     -> VideoViewer(url = url, asset = asset, onDismiss = onDismiss)
+            asset.isImage     -> ImageViewer(url = url, asset = asset, headers = resolvedHeaders, onDismiss = onDismiss)
+            asset.isVideo     -> VideoViewer(url = url, asset = asset, headers = resolvedHeaders, onDismiss = onDismiss)
             asset.isPdf       -> PdfViewer(url = url, asset = asset, onDismiss = onDismiss, context = context)
             isTextFile(asset) -> TextViewer(url = url, asset = asset, onDismiss = onDismiss)
             else -> {
@@ -94,7 +95,7 @@ fun FileViewerScreen(
 // ── Image viewer ──────────────────────────────────────────────────────────────
 
 @Composable
-private fun ImageViewer(url: String, asset: CloudinaryAsset, onDismiss: () -> Unit) {
+private fun ImageViewer(url: String, asset: CloudinaryAsset, headers: Map<String, String>? = null, onDismiss: () -> Unit) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     var showControls by remember { mutableStateOf(true) }
@@ -122,8 +123,16 @@ private fun ImageViewer(url: String, asset: CloudinaryAsset, onDismiss: () -> Un
                 },
             contentAlignment = Alignment.Center
         ) {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val imgRequest = remember(url, headers) {
+                coil.request.ImageRequest.Builder(context)
+                    .data(url)
+                    .crossfade(true)
+                    .apply { headers?.forEach { (k, v) -> addHeader(k, v) } }
+                    .build()
+            }
             AsyncImage(
-                model = url,
+                model = imgRequest,
                 contentDescription = asset.displayTitle,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
@@ -175,16 +184,31 @@ private fun ImageViewer(url: String, asset: CloudinaryAsset, onDismiss: () -> Un
 // ── Video viewer ──────────────────────────────────────────────────────────────
 
 @Composable
-private fun VideoViewer(url: String, asset: CloudinaryAsset, onDismiss: () -> Unit) {
+private fun VideoViewer(url: String, asset: CloudinaryAsset, headers: Map<String, String>? = null, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    val exoPlayer = remember(url) {
+    val exoPlayer = remember(url, headers) {
+        val dsFactory = if (headers != null) {
+            val okClient = okhttp3.OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    val req = chain.request().newBuilder()
+                        .apply { headers.forEach { (k, v) -> header(k, v) } }
+                        .build()
+                    chain.proceed(req)
+                }
+                .build()
+            androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okClient)
+        } else {
+            androidx.media3.datasource.DefaultHttpDataSource.Factory()
+        }
+        val src = androidx.media3.exoplayer.source.ProgressiveMediaSource.Factory(dsFactory)
+            .createMediaSource(MediaItem.fromUri(url))
         ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(url))
+            setMediaSource(src)
             prepare()
             playWhenReady = true
         }
     }
-    DisposableEffect(url) { onDispose { exoPlayer.release() } }
+    DisposableEffect(url, headers) { onDispose { exoPlayer.release() } }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         androidx.compose.ui.viewinterop.AndroidView(

@@ -18,7 +18,8 @@ data class CloudinaryAsset(
     val height: Int? = null,
     val duration: Double? = null,
     val folder: String? = null,
-    @SerializedName("display_name") val displayName: String? = null
+    @SerializedName("display_name") val displayName: String? = null,
+    @SerializedName("thumbnail_url")  val thumbnailUrl: String = ""
 ) {
     val fileName: String
         get() {
@@ -65,16 +66,23 @@ data class CloudinaryAsset(
             else -> format.uppercase()
         }
 
-    val thumbnailUrl: String
+    val resolvedThumbnailUrl: String
         get() {
-            // For images, request a small thumbnail via Cloudinary transformations
+            // Explicitly stored thumbnail takes priority (GDrive thumbnailLink, etc.)
+            if (thumbnailUrl.isNotBlank()) return thumbnailUrl
+            // Cloudinary: derive via URL transforms
             if (isImage && secureUrl.contains("image/upload")) {
                 return secureUrl.replace("image/upload/", "image/upload/w_400,h_240,c_fill,q_70/")
             }
-            // For video, get the first frame as image
             if (isVideo && secureUrl.contains("video/upload")) {
                 val withoutExt = secureUrl.substringBeforeLast(".")
                 return "$withoutExt.jpg".replace("video/upload/", "video/upload/w_400,h_240,c_fill,so_0,q_70/")
+            }
+            if (isPdf && secureUrl.contains("image/upload")) {
+                // Cloudinary can render PDF page 1 as an image
+                return secureUrl
+                    .replace("image/upload/", "image/upload/w_400,h_240,c_fill,q_70,pg_1/")
+                    .replace(Regex("\.pdf$", RegexOption.IGNORE_CASE), ".jpg")
             }
             return ""
         }

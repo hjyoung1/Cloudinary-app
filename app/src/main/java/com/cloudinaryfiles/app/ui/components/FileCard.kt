@@ -59,6 +59,7 @@ fun FileCard(
     onSelectToggle: () -> Unit = {},
     onLongPress: () -> Unit = {},
     onClick: () -> Unit = {},
+    authHeaders: Map<String, String>? = null,
     modifier: Modifier = Modifier
 ) {
     val pulseAnim = rememberInfiniteTransition(label = "pulse")
@@ -145,7 +146,7 @@ fun FileCard(
                         }
                     } else {
                         // ── Static thumbnail ──────────────────────────────────
-                        ThumbnailContent(asset = asset, isPlaying = isPlaying, scale = scale)
+                        ThumbnailContent(asset = asset, isPlaying = isPlaying, scale = scale, authHeaders = authHeaders)
                     }
 
                     // Format badge — top-left (skip when inline video showing)
@@ -279,18 +280,32 @@ fun FileCard(
 // ── Thumbnail content (static) ────────────────────────────────────────────────
 
 @Composable
-private fun ThumbnailContent(asset: CloudinaryAsset, isPlaying: Boolean, scale: Float) {
-    // Best thumbnail URL: use cloudinary thumbnail first, then secureUrl for images
+private fun ThumbnailContent(asset: CloudinaryAsset, isPlaying: Boolean, scale: Float, authHeaders: Map<String, String>? = null) {
+    // Best thumbnail URL:
+    // 1. resolvedThumbnailUrl (Cloudinary transforms, GDrive thumbnailLink, Dropbox stored link)
+    // 2. For Cloudinary images/PDFs without thumbnail: secureUrl directly
+    // 3. For GDrive/Dropbox without thumbnailLink: don't use secureUrl (needs auth + may be stale)
+    val isCloudinary = asset.secureUrl.contains("cloudinary.com")
     val displayThumbUrl = when {
-        asset.thumbnailUrl.isNotEmpty() -> asset.thumbnailUrl
-        asset.isImage                   -> asset.secureUrl   // Show actual image for non-Cloudinary
-        else                            -> ""
+        asset.resolvedThumbnailUrl.isNotEmpty() -> asset.resolvedThumbnailUrl
+        isCloudinary && asset.isImage           -> asset.secureUrl  // Cloudinary images load directly
+        else                                    -> ""               // GDrive/Dropbox: use thumbnailLink or nothing
     }
 
     if (displayThumbUrl.isNotEmpty()) {
         var imageState by remember { mutableStateOf<AsyncImagePainter.State>(AsyncImagePainter.State.Empty) }
+        val context = androidx.compose.ui.platform.LocalContext.current
+        val imgRequest = remember(displayThumbUrl, authHeaders) {
+            coil.request.ImageRequest.Builder(context)
+                .data(displayThumbUrl)
+                .crossfade(true)
+                .apply {
+                    authHeaders?.forEach { (k, v) -> addHeader(k, v) }
+                }
+                .build()
+        }
         AsyncImage(
-            model = displayThumbUrl,
+            model = imgRequest,
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
@@ -427,16 +442,31 @@ private fun InlineVideoControlBtn(
 // ── Inline ExoPlayer ──────────────────────────────────────────────────────────
 
 @Composable
-private fun InlineVideoPlayer(url: String, modifier: Modifier = Modifier) {
+private fun InlineVideoPlayer(url: String, headers: Map<String, String>? = null, modifier: Modifier = Modifier) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val exoPlayer = remember(url) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val exoPlayer = remember(url, headers) {
+        val dsFactory = if (headers != null) {
+            val okClient = okhttp3.OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    val req = chain.request().newBuilder()
+                        .apply { headers.forEach { (k, v) -> header(k, v) } }
+                        .build()
+                    chain.proceed(req)
+                }.build()
+            androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okClient)
+        } else {
+            androidx.media3.datasource.DefaultHttpDataSource.Factory()
+        }
+        val src = androidx.media3.exoplayer.source.ProgressiveMediaSource.Factory(dsFactory)
+            .createMediaSource(MediaItem.fromUri(url))
         ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(url))
+            setMediaSource(src)
             prepare()
             playWhenReady = true
         }
     }
-    DisposableEffect(url) { onDispose { exoPlayer.release() } }
+    DisposableEffect(url, headers) { onDispose { exoPlayer.release() } }
 
     AndroidView(
         factory = { ctx ->

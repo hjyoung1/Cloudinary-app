@@ -334,6 +334,62 @@ class DropboxRepository {
         }
     }
 
+    /**
+     * Get a fresh 4-hour Dropbox temp link for a single file path.
+     * Must be called on IO dispatcher.
+     */
+    suspend fun getFreshLink(account: NamedAccount, path: String): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val token = account.oauthAccessToken
+        if (token.isBlank()) return@withContext ""
+        try {
+            withRetry(maxAttempts = 2) { attempt ->
+                AppLogger.d(LOG, "getFreshLink($path) attempt $attempt")
+                val body = """{"path":"$path"}""".toRequestBody("application/json".toMediaType())
+                val req = Request.Builder()
+                    .url("https://api.dropboxapi.com/2/files/get_temporary_link")
+                    .post(body)
+                    .header("Authorization", "Bearer $token")
+                    .build()
+                val resp = client.newCall(req).execute()
+                val respBody = resp.body?.use { it.string() } ?: ""
+                if (!resp.isSuccessful) {
+                    AppLogger.w(LOG, "getFreshLink HTTP ${resp.code}: $respBody")
+                    return@withRetry ""
+                }
+                JSONObject(respBody).optString("link", "")
+            }
+        } catch (e: Exception) {
+            AppLogger.e(LOG, "getFreshLink exception: ${e.message}")
+            ""
+        }
+    }
+
+    /**
+     * Get Dropbox image thumbnail (JPEG bytes → base64 data URL string) for card display.
+     * Only works for images; returns "" for unsupported types.
+     */
+    suspend fun getThumbnailUrl(account: NamedAccount, path: String, ext: String): String {
+        val supported = setOf("jpg","jpeg","png","gif","bmp","tiff","tif","webp","heic","heif")
+        if (ext.lowercase() !in supported) return ""
+        val token = account.oauthAccessToken
+        if (token.isBlank()) return ""
+        return try {
+            val apiArg = """{"path":"$path","format":"jpeg","size":"w480h320","mode":"fitone_bestfit"}"""
+            val req = Request.Builder()
+                .url("https://content.dropboxapi.com/2/files/get_thumbnail_v2")
+                .post("null".toRequestBody("text/plain".toMediaType()))
+                .header("Authorization", "Bearer $token")
+                .header("Dropbox-API-Arg", apiArg)
+                .build()
+            val resp = client.newCall(req).execute()
+            if (!resp.isSuccessful) return ""
+            val bytes = resp.body?.bytes() ?: return ""
+            val b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+            "data:image/jpeg;base64,$b64"
+        } catch (_: Exception) { "" }
+    }
+
+
     private fun extensionToResourceType(ext: String) = when {
         ext in setOf("mp3","wav","ogg","flac","aac","m4a","opus") -> "video"
         ext in setOf("mp4","mov","avi","mkv","webm")              -> "video"

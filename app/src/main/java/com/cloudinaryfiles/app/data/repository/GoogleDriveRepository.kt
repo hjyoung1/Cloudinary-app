@@ -77,7 +77,7 @@ class GoogleDriveRepository {
                     append("https://www.googleapis.com/drive/v3/files")
                     append("?q=trashed%3Dfalse")
                     append("&pageSize=1000")
-                    append("&fields=nextPageToken,files(id,name,mimeType,size,createdTime,modifiedTime,parents,videoMediaMetadata)")
+                    append("&fields=nextPageToken,files(id,name,mimeType,size,createdTime,modifiedTime,parents,videoMediaMetadata,thumbnailLink,hasThumbnail)")
                     if (pageToken != null) append("&pageToken=$pageToken")
                 }
                 AppLogger.d(LOG, "Fetching page $pageNum — pageToken=${pageToken?.take(20)?.plus("…") ?: "null"}")
@@ -112,14 +112,19 @@ class GoogleDriveRepository {
                     val ext     = name.substringAfterLast(".", "").lowercase()
                     val size    = f.optLong("size", 0L)
                     val created = f.optString("createdTime")
-                    val streamUrl = "https://www.googleapis.com/drive/v3/files/$id?alt=media&access_token=$token"
+                    // secureUrl = clean URL, no embedded token (auth via header at play time)
+                    val streamUrl = "https://www.googleapis.com/drive/v3/files/$id?alt=media"
+                    val thumbLink = f.optString("thumbnailLink", "").let { lnk ->
+                        // Google sends s220 thumbnails; upgrade to s800 for better quality
+                        if (lnk.isNotBlank()) lnk.replace("=s220", "=s800") else lnk
+                    }
 
                     val mediaMeta = f.optJSONObject("videoMediaMetadata")
                     val durationMs = mediaMeta?.optLong("durationMillis", 0L) ?: 0L
                     val durationSec = if (durationMs > 0) durationMs / 1000.0 else null
 
                     val resourceType = mimeToResourceType(mime, ext)
-                    AppLogger.v(LOG, "  File[$i]: id=$id name='$name' mime=$mime ext=$ext size=$size type=$resourceType dur=${durationSec}s")
+                    AppLogger.v(LOG, "  File[$i]: id=$id name='$name' mime=$mime ext=$ext size=$size type=$resourceType dur=${durationSec}s thumb=${thumbLink.take(40).ifEmpty{"none"}}")
 
                     allAssets += CloudinaryAsset(
                         assetId      = "gdrive:$id",
@@ -129,8 +134,9 @@ class GoogleDriveRepository {
                         type         = "upload",
                         createdAt    = created,
                         bytes        = size,
-                        url          = AppLogger.redactUrl(streamUrl),
+                        url          = streamUrl,
                         secureUrl    = streamUrl,
+                        thumbnailUrl = thumbLink,
                         displayName  = name.substringBeforeLast("."),
                         duration     = durationSec
                     )

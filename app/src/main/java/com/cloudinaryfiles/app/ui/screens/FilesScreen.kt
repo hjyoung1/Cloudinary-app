@@ -77,6 +77,7 @@ fun FilesScreen(
     }
     val isAudioPlaying = state.currentlyPlayingId != null
     var showAppSettings by remember { mutableStateOf(false) }
+    var actionSheetAsset by remember { mutableStateOf<com.cloudinaryfiles.app.data.model.CloudinaryAsset?>(null) }
     val appPrefs = remember { UserPreferences(context) }
 
     // Handle back: dismiss viewer → clear selection → then default (exit app)
@@ -410,6 +411,7 @@ fun FilesScreen(
                                         isSelectionMode = state.isSelectionMode,
                                         isInlineVideoActive = state.inlineVideoId == asset.assetId,
                                         inlineVideoUrl = if (state.inlineVideoId == asset.assetId) state.inlineVideoUrl else null,
+                                        authHeaders = if (state.inlineVideoId == asset.assetId) state.inlineVideoHeaders ?: state.accountHeaders else state.accountHeaders,
                                         onInlineVideoStop = { vm.clearInlineVideo() },
                                         onInlineVideoFullScreen = {
                                             vm.clearInlineVideo()
@@ -448,8 +450,7 @@ fun FilesScreen(
                                             }
                                         },
                                         onLongPress = {
-                                            if (!state.isSelectionMode) vm.toggleSelectionMode()
-                                            vm.toggleSelection(asset.assetId)
+                                            actionSheetAsset = asset
                                         },
                                         modifier = Modifier.animateItem()
                                     )
@@ -465,6 +466,7 @@ fun FilesScreen(
                 FileViewerScreen(
                     asset = state.viewingAsset!!,
                     resolvedUrl = state.viewingUrl,
+                    resolvedHeaders = state.viewingHeaders,
                     onDismiss = { vm.dismissViewer() }
                 )
             }
@@ -520,6 +522,44 @@ fun FilesScreen(
             current = state.filterState,
             onApply = { vm.applyFilter(it) },
             onDismiss = { vm.closeFilterSheet() }
+        )
+    }
+
+    // Long-press action sheet
+    actionSheetAsset?.let { asset ->
+        FileActionSheet(
+            asset = asset,
+            isSelectionMode = state.isSelectionMode,
+            isSelected = state.selectedAssets.contains(asset.assetId),
+            onDismiss = { actionSheetAsset = null },
+            onOpen = {
+                actionSheetAsset = null
+                if (asset.isAudio) vm.togglePlay(asset)
+                else if (asset.isVideo) vm.setInlineVideo(asset)
+                else vm.openFile(asset)
+            },
+            onInfo = { actionSheetAsset = null; vm.showInfo(asset) },
+            onSelect = {
+                actionSheetAsset = null
+                if (!state.isSelectionMode) vm.toggleSelectionMode()
+                vm.toggleSelection(asset.assetId)
+            },
+            onCopyLink = { actionSheetAsset = null; vm.copyLink(asset) },
+            onShare = {
+                actionSheetAsset = null
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, asset.secureUrl)
+                    putExtra(Intent.EXTRA_SUBJECT, asset.displayTitle)
+                }
+                context.startActivity(Intent.createChooser(intent, "Share file"))
+            },
+            onDelete = {
+                actionSheetAsset = null
+                if (!state.isSelectionMode) vm.toggleSelectionMode()
+                vm.toggleSelection(asset.assetId)
+                vm.deleteSelectedAssets()
+            }
         )
     }
 
@@ -1167,4 +1207,177 @@ private fun SettingsTextField(
             imeAction = androidx.compose.ui.text.input.ImeAction.Next
         )
     )
+}
+
+// ── Long-press File Action Sheet ──────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FileActionSheet(
+    asset: com.cloudinaryfiles.app.data.model.CloudinaryAsset,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onDismiss: () -> Unit,
+    onOpen: () -> Unit,
+    onInfo: () -> Unit,
+    onSelect: () -> Unit,
+    onCopyLink: () -> Unit,
+    onShare: () -> Unit,
+    onDelete: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF12101E),
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .padding(top = 12.dp, bottom = 4.dp)
+                    .width(36.dp)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Color.White.copy(0.2f))
+            )
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = 16.dp)
+        ) {
+            // File info header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Type badge
+                Surface(
+                    color = when {
+                        asset.isAudio -> Color(0xFF6C3CE1).copy(0.25f)
+                        asset.isVideo -> Color(0xFF0D47A1).copy(0.3f)
+                        asset.isImage -> Color(0xFF1B5E20).copy(0.3f)
+                        asset.isPdf   -> Color(0xFF7B0000).copy(0.3f)
+                        else          -> Color.White.copy(0.08f)
+                    },
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.size(44.dp)
+                ) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(
+                            when {
+                                asset.isAudio -> Icons.Outlined.MusicNote
+                                asset.isVideo -> Icons.Outlined.Videocam
+                                asset.isImage -> Icons.Outlined.Image
+                                asset.isPdf   -> Icons.Outlined.PictureAsPdf
+                                else          -> Icons.Outlined.InsertDriveFile
+                            },
+                            contentDescription = null,
+                            tint = when {
+                                asset.isAudio -> Color(0xFF9D6FFF)
+                                asset.isVideo -> Color(0xFF64B5F6)
+                                asset.isImage -> Color(0xFF81C784)
+                                asset.isPdf   -> Color(0xFFEF9A9A)
+                                else          -> Color.White.copy(0.6f)
+                            },
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        asset.displayTitle,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        "${asset.format.uppercase()} · ${asset.formattedSize}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(0.5f)
+                    )
+                }
+            }
+
+            HorizontalDivider(color = Color.White.copy(0.08f), modifier = Modifier.padding(horizontal = 16.dp))
+            Spacer(Modifier.height(4.dp))
+
+            // Actions
+            ActionSheetItem(
+                icon = when {
+                    asset.isAudio -> Icons.Outlined.PlayCircleOutline
+                    asset.isVideo -> Icons.Outlined.PlayCircleOutline
+                    else -> Icons.Outlined.OpenInNew
+                },
+                label = when {
+                    asset.isAudio -> "Play Audio"
+                    asset.isVideo -> "Play Video"
+                    asset.isImage -> "View Image"
+                    asset.isPdf   -> "Open PDF"
+                    else -> "Open File"
+                },
+                tint = MaterialTheme.colorScheme.primary,
+                onClick = onOpen
+            )
+            ActionSheetItem(
+                icon = Icons.Outlined.Info,
+                label = "File Info",
+                onClick = onInfo
+            )
+            ActionSheetItem(
+                icon = if (isSelected) Icons.Filled.CheckBox else Icons.Outlined.CheckBoxOutlineBlank,
+                label = if (isSelected) "Deselect" else "Select",
+                onClick = onSelect
+            )
+            ActionSheetItem(
+                icon = Icons.Outlined.Link,
+                label = "Copy Link",
+                onClick = onCopyLink
+            )
+            ActionSheetItem(
+                icon = Icons.Outlined.Share,
+                label = "Share",
+                onClick = onShare
+            )
+
+            HorizontalDivider(color = Color.White.copy(0.08f), modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+
+            ActionSheetItem(
+                icon = Icons.Outlined.DeleteOutline,
+                label = "Delete",
+                tint = MaterialTheme.colorScheme.error,
+                onClick = onDelete
+            )
+        }
+    }
+}
+
+@Composable
+private fun ActionSheetItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    tint: androidx.compose.ui.graphics.Color = Color.White.copy(0.85f),
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        color = Color.Transparent,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Icon(icon, null, tint = tint, modifier = Modifier.size(22.dp))
+            Text(label, style = MaterialTheme.typography.bodyMedium, color = tint, fontWeight = FontWeight.Medium)
+        }
+    }
 }
