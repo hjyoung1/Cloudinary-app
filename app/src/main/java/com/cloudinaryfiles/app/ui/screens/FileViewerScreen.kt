@@ -513,8 +513,7 @@ private fun ArchivePreview(asset: CloudinaryAsset, url: String, onDismiss: () ->
                 Text("Cannot preview archives", color = Color.White,
                     style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(
-                    "${asset.format.uppercase()} archive files can't be previewed in-app.
-Open with an external app to browse the contents.",
+                    "${asset.format.uppercase()} archive files can't be previewed in-app.\nOpen with an external app to browse the contents.",
                     color = Color.White.copy(0.6f), fontSize = 13.sp,
                     textAlign = TextAlign.Center, lineHeight = 18.sp
                 )

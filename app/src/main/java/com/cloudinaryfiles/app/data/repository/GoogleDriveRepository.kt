@@ -16,6 +16,7 @@ import java.util.concurrent.TimeUnit
 class GoogleDriveRepository {
 
     private val LOG = "GDriveRepo"
+    private val tokenCache = mutableMapOf<String, Pair<String, Long>>()
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
