@@ -2,12 +2,20 @@ package com.cloudinaryfiles.app.ui.screens
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color as AColor
+import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,8 +29,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -41,6 +49,7 @@ import com.cloudinaryfiles.app.data.model.CloudinaryAsset
 import com.cloudinaryfiles.app.ui.theme.SurfaceDark
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.net.URL
 
 /**
@@ -53,7 +62,6 @@ fun FileViewerScreen(
     resolvedUrl: String?,
     onDismiss: () -> Unit
 ) {
-    // Intercept system back — always close viewer, never exit app
     BackHandler(enabled = true) { onDismiss() }
 
     val context = LocalContext.current
@@ -65,9 +73,9 @@ fun FileViewerScreen(
             .background(Color.Black)
     ) {
         when {
-            asset.isImage  -> ImageViewer(url = url, asset = asset, onDismiss = onDismiss)
-            asset.isVideo  -> VideoViewer(url = url, asset = asset, onDismiss = onDismiss)
-            asset.isPdf    -> PdfViewer(url = url, asset = asset, onDismiss = onDismiss, context = context)
+            asset.isImage     -> ImageViewer(url = url, asset = asset, onDismiss = onDismiss)
+            asset.isVideo     -> VideoViewer(url = url, asset = asset, onDismiss = onDismiss)
+            asset.isPdf       -> PdfViewer(url = url, asset = asset, onDismiss = onDismiss, context = context)
             isTextFile(asset) -> TextViewer(url = url, asset = asset, onDismiss = onDismiss)
             else -> {
                 LaunchedEffect(Unit) { openWithSystem(context, url); onDismiss() }
@@ -85,7 +93,6 @@ fun FileViewerScreen(
 
 // ── Image viewer ──────────────────────────────────────────────────────────────
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ImageViewer(url: String, asset: CloudinaryAsset, onDismiss: () -> Unit) {
     var scale by remember { mutableFloatStateOf(1f) }
@@ -129,7 +136,6 @@ private fun ImageViewer(url: String, asset: CloudinaryAsset, onDismiss: () -> Un
             }
         }
 
-        // Top bar
         AnimatedVisibility(
             visible = showControls,
             enter = fadeIn() + slideInVertically { -it },
@@ -137,9 +143,7 @@ private fun ImageViewer(url: String, asset: CloudinaryAsset, onDismiss: () -> Un
             modifier = Modifier.align(Alignment.TopCenter)
         ) {
             Box(
-                Modifier
-                    .fillMaxWidth()
-                    .background(Color.Black.copy(0.6f))
+                Modifier.fillMaxWidth().background(Color.Black.copy(0.6f))
                     .padding(top = 32.dp, bottom = 8.dp, start = 4.dp, end = 16.dp)
             ) {
                 IconButton(onClick = onDismiss, modifier = Modifier.align(Alignment.CenterStart)) {
@@ -152,7 +156,6 @@ private fun ImageViewer(url: String, asset: CloudinaryAsset, onDismiss: () -> Un
             }
         }
 
-        // Bottom hint
         AnimatedVisibility(
             visible = showControls && scale == 1f,
             enter = fadeIn(), exit = fadeOut(),
@@ -174,8 +177,6 @@ private fun ImageViewer(url: String, asset: CloudinaryAsset, onDismiss: () -> Un
 @Composable
 private fun VideoViewer(url: String, asset: CloudinaryAsset, onDismiss: () -> Unit) {
     val context = LocalContext.current
-
-    // Build player — key on url so it rebuilds if URL changes
     val exoPlayer = remember(url) {
         ExoPlayer.Builder(context).build().apply {
             setMediaItem(MediaItem.fromUri(url))
@@ -183,9 +184,7 @@ private fun VideoViewer(url: String, asset: CloudinaryAsset, onDismiss: () -> Un
             playWhenReady = true
         }
     }
-    DisposableEffect(url) {
-        onDispose { exoPlayer.release() }
-    }
+    DisposableEffect(url) { onDispose { exoPlayer.release() } }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         androidx.compose.ui.viewinterop.AndroidView(
@@ -204,8 +203,6 @@ private fun VideoViewer(url: String, asset: CloudinaryAsset, onDismiss: () -> Un
             update = { it.player = exoPlayer },
             modifier = Modifier.fillMaxSize()
         )
-
-        // Back button — top-left, always visible
         Box(
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -221,21 +218,75 @@ private fun VideoViewer(url: String, asset: CloudinaryAsset, onDismiss: () -> Un
     }
 }
 
-// ── PDF viewer ────────────────────────────────────────────────────────────────
+// ── PDF viewer (native PdfRenderer — no network dependency) ───────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PdfViewer(url: String, asset: CloudinaryAsset, onDismiss: () -> Unit, context: Context) {
-    val viewerUrl = "https://docs.google.com/viewer?url=${Uri.encode(url)}&embedded=true"
+    var pages by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var pageCount by remember { mutableIntStateOf(0) }
+    var downloadProgress by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(url) {
+        isLoading = true; error = null; pages = emptyList()
+        try {
+            val tempFile = File(context.cacheDir, "cv_pdf_${asset.assetId.take(16)}.pdf")
+            withContext(Dispatchers.IO) {
+                // Download with progress
+                val conn = java.net.URL(url).openConnection().apply { connect() }
+                val totalBytes = conn.contentLength.toLong().coerceAtLeast(1L)
+                conn.getInputStream().use { ins ->
+                    tempFile.outputStream().use { out ->
+                        val buf = ByteArray(8192); var read: Int; var downloaded = 0L
+                        while (ins.read(buf).also { read = it } != -1) {
+                            out.write(buf, 0, read); downloaded += read
+                            downloadProgress = (downloaded.toFloat() / totalBytes).coerceIn(0f, 1f)
+                        }
+                    }
+                }
+                val pfd = ParcelFileDescriptor.open(tempFile, ParcelFileDescriptor.MODE_READ_ONLY)
+                val renderer = PdfRenderer(pfd)
+                pageCount = renderer.pageCount
+                val screenWidth = context.resources.displayMetrics.widthPixels
+                val newPages = mutableListOf<Bitmap>()
+                for (i in 0 until minOf(renderer.pageCount, 50)) {  // limit to 50 pages
+                    val page = renderer.openPage(i)
+                    val ratio = page.height.toFloat() / page.width.toFloat()
+                    val bmpW = screenWidth.coerceAtMost(1080)
+                    val bmpH = (bmpW * ratio).toInt()
+                    val bmp = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888)
+                    val canvas = Canvas(bmp)
+                    canvas.drawColor(AColor.WHITE)
+                    page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    page.close()
+                    newPages.add(bmp)
+                    // Emit progressively so first page shows ASAP
+                    if (i == 0) withContext(Dispatchers.Main) { pages = newPages.toList() }
+                }
+                renderer.close(); pfd.close()
+                withContext(Dispatchers.Main) { pages = newPages }
+            }
+        } catch (e: Exception) {
+            error = "Could not load PDF: ${e.message}"
+        } finally {
+            isLoading = false
+        }
+    }
+
     Column(Modifier.fillMaxSize().background(Color(0xFF1A1A2E))) {
         TopAppBar(
             title = {
                 Column {
                     Text(asset.displayTitle, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.White, maxLines = 1)
-                    Text("PDF · ${asset.formattedSize}", fontSize = 10.sp, color = Color.White.copy(0.6f))
+                    Text("PDF · ${asset.formattedSize}${if (pageCount > 0) " · $pageCount pages" else ""}",
+                        fontSize = 10.sp, color = Color.White.copy(0.6f))
                 }
             },
-            navigationIcon = { IconButton(onClick = onDismiss) { Icon(Icons.Filled.ArrowBack, "Back", tint = Color.White) } },
+            navigationIcon = {
+                IconButton(onClick = onDismiss) { Icon(Icons.Filled.ArrowBack, "Back", tint = Color.White) }
+            },
             actions = {
                 IconButton(onClick = { openUrlInBrowser(context, url) }) {
                     Icon(Icons.Outlined.OpenInBrowser, "Open in browser", tint = Color.White)
@@ -243,20 +294,83 @@ private fun PdfViewer(url: String, asset: CloudinaryAsset, onDismiss: () -> Unit
             },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0E0C1C))
         )
-        androidx.compose.ui.viewinterop.AndroidView(
-            factory = { ctx ->
-                android.webkit.WebView(ctx).apply {
-                    layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                    settings.javaScriptEnabled = true
-                    settings.loadWithOverviewMode = true
-                    settings.useWideViewPort = true
-                    settings.builtInZoomControls = true
-                    settings.displayZoomControls = false
-                    loadUrl(viewerUrl)
+
+        when {
+            error != null -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
+                        Icon(Icons.Outlined.ErrorOutline, null, tint = Color(0xFFFF6B6B), modifier = Modifier.size(48.dp))
+                        Spacer(Modifier.height(12.dp))
+                        Text(error!!, color = Color(0xFFFF6B6B), textAlign = TextAlign.Center, fontSize = 13.sp)
+                        Spacer(Modifier.height(16.dp))
+                        OutlinedButton(onClick = { openUrlInBrowser(context, url) }) {
+                            Icon(Icons.Outlined.OpenInBrowser, null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Open in Browser")
+                        }
+                    }
                 }
-            },
-            modifier = Modifier.fillMaxSize()
-        )
+            }
+            pages.isEmpty() && isLoading -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(
+                            progress = { downloadProgress },
+                            color = Color(0xFF7C4DFF),
+                            modifier = Modifier.size(56.dp),
+                            strokeWidth = 4.dp
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            if (downloadProgress < 0.99f)
+                                "Downloading… ${"%.0f".format(downloadProgress * 100)}%"
+                            else "Rendering pages…",
+                            color = Color.White.copy(0.7f)
+                        )
+                    }
+                }
+            }
+            else -> {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize().background(Color(0xFF1A1A2E)),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    itemsIndexed(pages) { index, bitmap ->
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            tonalElevation = 2.dp,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column {
+                                Image(
+                                    bitmap = bitmap.asImageBitmap(),
+                                    contentDescription = "Page ${index + 1}",
+                                    contentScale = ContentScale.FillWidth,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                        // Page number label
+                        Text(
+                            "Page ${index + 1}${if (pageCount > 0) " / $pageCount" else ""}",
+                            color = Color.White.copy(0.3f),
+                            fontSize = 10.sp,
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                    // Loading more pages indicator
+                    if (isLoading && pages.isNotEmpty()) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(color = Color(0xFF7C4DFF), modifier = Modifier.size(32.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

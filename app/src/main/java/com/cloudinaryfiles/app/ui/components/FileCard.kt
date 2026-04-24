@@ -1,9 +1,11 @@
 package com.cloudinaryfiles.app.ui.components
 
+import android.view.ViewGroup
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,12 +21,19 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
 import com.cloudinaryfiles.app.data.model.CloudinaryAsset
 import com.cloudinaryfiles.app.ui.theme.*
 import java.time.OffsetDateTime
@@ -37,6 +46,11 @@ fun FileCard(
     isPlaying: Boolean,
     isSelected: Boolean = false,
     isSelectionMode: Boolean = false,
+    // Inline video state
+    isInlineVideoActive: Boolean = false,
+    inlineVideoUrl: String? = null,
+    onInlineVideoStop: () -> Unit = {},
+    onInlineVideoFullScreen: () -> Unit = {},
     onPlayClick: () -> Unit,
     onCopyLink: () -> Unit,
     onShare: () -> Unit,
@@ -47,7 +61,6 @@ fun FileCard(
     onClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    // Pulse animation when audio is playing
     val pulseAnim = rememberInfiniteTransition(label = "pulse")
     val scale by pulseAnim.animateFloat(
         initialValue = 1f, targetValue = if (isPlaying) 1.10f else 1f,
@@ -62,10 +75,14 @@ fun FileCard(
         if ((asset.isAudio || asset.isVideo) && d != null && d > 0.0) formatDurationSec(d) else null
     }
 
-    // Only show border when selected — no other selection visual
+    var showInlineControls by remember(isInlineVideoActive) { mutableStateOf(isInlineVideoActive) }
+
     val borderMod = if (isSelected)
         Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(20.dp))
     else Modifier
+
+    // Card height expands when inline video is active
+    val thumbnailHeight = if (isInlineVideoActive) 220.dp else 148.dp
 
     ElevatedCard(
         modifier = modifier.then(borderMod),
@@ -75,9 +92,10 @@ fun FileCard(
         ),
         colors = CardDefaults.elevatedCardColors(
             containerColor = when {
-                isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
-                isPlaying  -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.22f)
-                else       -> MaterialTheme.colorScheme.surfaceVariant
+                isSelected     -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
+                isInlineVideoActive -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.18f)
+                isPlaying      -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.22f)
+                else           -> MaterialTheme.colorScheme.surfaceVariant
             }
         )
     ) {
@@ -85,66 +103,71 @@ fun FileCard(
             modifier = Modifier
                 .fillMaxSize()
                 .clip(RoundedCornerShape(20.dp))
-                .combinedClickable(
-                    onClick = onClick,
-                    onLongClick = onLongPress
-                )
+                .combinedClickable(onClick = onClick, onLongClick = onLongPress)
         ) {
             Column {
-                // ── Thumbnail / preview — taller for more visual impact ──────
+                // ── Thumbnail / preview ─────────────────────────────────────
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(148.dp)
+                        .height(thumbnailHeight)
                         .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
                 ) {
-                    // Background / thumbnail
-                    if (asset.thumbnailUrl.isNotEmpty()) {
-                        AsyncImage(
-                            model = asset.thumbnailUrl,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
+                    if (isInlineVideoActive && inlineVideoUrl != null) {
+                        // ── Inline video player ──────────────────────────────
+                        InlineVideoPlayer(
+                            url = inlineVideoUrl,
+                            modifier = Modifier.fillMaxSize().pointerInput(Unit) {
+                                detectTapGestures(onTap = { showInlineControls = !showInlineControls })
+                            }
                         )
-                        // Scrim so badges are readable
-                        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.28f)))
-                    } else {
-                        Box(Modifier.fillMaxSize().background(assetGradient(asset)))
-                        when {
-                            asset.isAudio -> WaveformDecoration(isPlaying = isPlaying)
-                            !asset.isVideo && !asset.isImage -> {
-                                // Generic file icon
-                                Icon(
-                                    imageVector = when {
-                                        asset.isPdf   -> Icons.Outlined.PictureAsPdf
-                                        else          -> Icons.Outlined.InsertDriveFile
-                                    },
-                                    contentDescription = null,
-                                    tint = Color.White.copy(alpha = 0.22f),
-                                    modifier = Modifier.align(Alignment.Center).size(52.dp)
+                        // Dim overlay when controls visible
+                        if (showInlineControls) {
+                            Box(Modifier.fillMaxSize().background(Color.Black.copy(0.5f)))
+                            // Stop and Fullscreen buttons
+                            Row(
+                                modifier = Modifier.align(Alignment.Center),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
+                                InlineVideoControlBtn(
+                                    icon = Icons.Filled.StopCircle,
+                                    label = "Stop",
+                                    tint = Color(0xFFFF6B6B),
+                                    onClick = { onInlineVideoStop(); showInlineControls = false }
+                                )
+                                InlineVideoControlBtn(
+                                    icon = Icons.Filled.Fullscreen,
+                                    label = "Fullscreen",
+                                    tint = Color.White,
+                                    onClick = onInlineVideoFullScreen
                                 )
                             }
                         }
+                    } else {
+                        // ── Static thumbnail ──────────────────────────────────
+                        ThumbnailContent(asset = asset, isPlaying = isPlaying, scale = scale)
                     }
 
-                    // Format badge — top-left
-                    Surface(
-                        modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
-                        color = Color.Black.copy(alpha = 0.55f),
-                        shape = RoundedCornerShape(6.dp)
-                    ) {
-                        Text(
-                            text = asset.format.uppercase().take(4),
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 9.sp
-                        )
+                    // Format badge — top-left (skip when inline video showing)
+                    if (!isInlineVideoActive) {
+                        Surface(
+                            modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+                            color = Color.Black.copy(alpha = 0.55f),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                text = asset.format.uppercase().take(4),
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 9.sp
+                            )
+                        }
                     }
 
                     // Duration badge — top-right
-                    if (durationText != null) {
+                    if (durationText != null && !isInlineVideoActive) {
                         Surface(
                             modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
                             color = Color.Black.copy(alpha = 0.60f),
@@ -155,31 +178,27 @@ fun FileCard(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(3.dp)
                             ) {
-                                Icon(
-                                    Icons.Outlined.Timer, null,
+                                Icon(Icons.Outlined.Timer, null,
                                     tint = if (asset.isAudio) AudioAccent else Color(0xFF81D4FA),
-                                    modifier = Modifier.size(10.dp)
-                                )
-                                Text(
-                                    text = durationText,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color.White,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
+                                    modifier = Modifier.size(10.dp))
+                                Text(durationText, style = MaterialTheme.typography.labelSmall,
+                                    color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Medium)
                             }
                         }
                     }
 
-                    // Play/pause button — audio AND video
-                    if (asset.isAudio || asset.isVideo) {
+                    // Play/pause button — only if not inline video active
+                    if (!isInlineVideoActive && (asset.isAudio || asset.isVideo)) {
                         Box(
                             modifier = Modifier
                                 .align(Alignment.Center)
-                                .graphicsLayer { scaleX = if (asset.isAudio) scale else 1f; scaleY = if (asset.isAudio) scale else 1f }
+                                .graphicsLayer {
+                                    scaleX = if (asset.isAudio) scale else 1f
+                                    scaleY = if (asset.isAudio) scale else 1f
+                                }
                         ) {
                             IconButton(
-                                onClick = if (asset.isVideo) onOpen else onPlayClick,
+                                onClick = if (asset.isVideo) onPlayClick else onPlayClick,
                                 modifier = Modifier
                                     .size(48.dp)
                                     .background(
@@ -200,7 +219,7 @@ fun FileCard(
                         }
                     }
 
-                    // Selection indicator — small dot in top-left when in selection mode
+                    // Selection indicator
                     if (isSelectionMode) {
                         Box(
                             modifier = Modifier
@@ -214,18 +233,13 @@ fun FileCard(
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
-                            if (isSelected) {
-                                Icon(
-                                    Icons.Filled.Check, null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(12.dp)
-                                )
-                            }
+                            if (isSelected) Icon(Icons.Filled.Check, null, tint = Color.White,
+                                modifier = Modifier.size(12.dp))
                         }
                     }
                 }
 
-                // ── Compact info row ──────────────────────────────────────────
+                // ── Info row ──────────────────────────────────────────────────
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -251,13 +265,10 @@ fun FileCard(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    // Link copy — only action shown in the card footer
                     IconButton(onClick = onCopyLink, modifier = Modifier.size(32.dp)) {
-                        Icon(
-                            Icons.Outlined.Link, "Copy link",
+                        Icon(Icons.Outlined.Link, "Copy link",
                             tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(16.dp)
-                        )
+                            modifier = Modifier.size(16.dp))
                     }
                 }
             }
@@ -265,7 +276,185 @@ fun FileCard(
     }
 }
 
-// ── Support composables ───────────────────────────────────────────────────────
+// ── Thumbnail content (static) ────────────────────────────────────────────────
+
+@Composable
+private fun ThumbnailContent(asset: CloudinaryAsset, isPlaying: Boolean, scale: Float) {
+    // Best thumbnail URL: use cloudinary thumbnail first, then secureUrl for images
+    val displayThumbUrl = when {
+        asset.thumbnailUrl.isNotEmpty() -> asset.thumbnailUrl
+        asset.isImage                   -> asset.secureUrl   // Show actual image for non-Cloudinary
+        else                            -> ""
+    }
+
+    if (displayThumbUrl.isNotEmpty()) {
+        var imageState by remember { mutableStateOf<AsyncImagePainter.State>(AsyncImagePainter.State.Empty) }
+        AsyncImage(
+            model = displayThumbUrl,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+            onState = { imageState = it }
+        )
+        if (imageState is AsyncImagePainter.State.Loading) {
+            Box(Modifier.fillMaxSize().background(assetGradient(asset)))
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Color.White.copy(0.5f), modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+            }
+        }
+        // Scrim so badges are readable
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.20f)))
+    } else {
+        // Gradient background + decorative content
+        Box(Modifier.fillMaxSize().background(assetGradient(asset)))
+        when {
+            asset.isAudio -> WaveformDecoration(isPlaying = isPlaying)
+            asset.isVideo -> VideoThumbnailDecoration()
+            asset.isPdf   -> PdfThumbnailDecoration(asset)
+            isTextLike(asset) -> TextFileThumbnailDecoration(asset)
+            else -> GenericFileThumbnailDecoration(asset)
+        }
+    }
+}
+
+// ── Decorations for non-image files ──────────────────────────────────────────
+
+@Composable
+private fun VideoThumbnailDecoration() {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Icon(Icons.Outlined.VideoFile, null, tint = Color.White.copy(0.25f),
+            modifier = Modifier.size(56.dp))
+    }
+}
+
+@Composable
+private fun PdfThumbnailDecoration(asset: CloudinaryAsset) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(12.dp),
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        // Top: PDF icon + format badge styled
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Surface(
+                color = Color(0xFFE53935).copy(0.85f),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(Icons.Outlined.PictureAsPdf, null, tint = Color.White, modifier = Modifier.size(14.dp))
+                    Text("PDF", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                }
+            }
+        }
+        // Bottom: file name hint
+        Text(
+            asset.displayTitle,
+            color = Color.White.copy(0.6f),
+            fontSize = 9.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            fontFamily = FontFamily.Monospace
+        )
+    }
+}
+
+@Composable
+private fun TextFileThumbnailDecoration(asset: CloudinaryAsset) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(10.dp),
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Icon(Icons.Outlined.Article, null, tint = Color(0xFF80CBC4), modifier = Modifier.size(16.dp))
+            Text(asset.format.uppercase(), color = Color(0xFF80CBC4),
+                fontWeight = FontWeight.Bold, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+        }
+        // Fake "lines of text" decorative blocks
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            repeat(4) { i ->
+                val frac = when (i) { 0 -> 0.9f; 1 -> 0.75f; 2 -> 0.85f; else -> 0.55f }
+                Box(
+                    Modifier.fillMaxWidth(frac).height(3.dp).clip(RoundedCornerShape(2.dp))
+                        .background(Color.White.copy(0.18f))
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GenericFileThumbnailDecoration(asset: CloudinaryAsset) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(Icons.Outlined.InsertDriveFile, null, tint = Color.White.copy(0.22f),
+                modifier = Modifier.size(44.dp))
+            Text(asset.format.uppercase().take(6), color = Color.White.copy(0.35f),
+                fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+        }
+    }
+}
+
+// ── Inline video controls ─────────────────────────────────────────────────────
+
+@Composable
+private fun InlineVideoControlBtn(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    tint: Color,
+    onClick: () -> Unit
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Box(
+            modifier = Modifier
+                .size(52.dp)
+                .background(Color.Black.copy(0.55f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            IconButton(onClick = onClick, modifier = Modifier.fillMaxSize()) {
+                Icon(icon, label, tint = tint, modifier = Modifier.size(28.dp))
+            }
+        }
+        Text(label, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+// ── Inline ExoPlayer ──────────────────────────────────────────────────────────
+
+@Composable
+private fun InlineVideoPlayer(url: String, modifier: Modifier = Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val exoPlayer = remember(url) {
+        ExoPlayer.Builder(context).build().apply {
+            setMediaItem(MediaItem.fromUri(url))
+            prepare()
+            playWhenReady = true
+        }
+    }
+    DisposableEffect(url) { onDispose { exoPlayer.release() } }
+
+    AndroidView(
+        factory = { ctx ->
+            PlayerView(ctx).apply {
+                player = exoPlayer
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                useController = false   // we have custom overlay controls
+            }
+        },
+        update = { it.player = exoPlayer },
+        modifier = modifier
+    )
+}
+
+// ── Audio waveform ────────────────────────────────────────────────────────────
 
 @Composable
 private fun WaveformDecoration(isPlaying: Boolean) {
@@ -298,13 +487,20 @@ private fun WaveformDecoration(isPlaying: Boolean) {
     }
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+private fun isTextLike(asset: CloudinaryAsset): Boolean =
+    asset.format.lowercase() in setOf("txt","md","json","xml","csv","html","htm","js","ts","kt",
+        "java","py","rb","go","rs","css","sh","log","yaml","yml","toml","ini","cfg","conf",
+        "srt","vtt","ass","sub")
+
 private fun assetGradient(asset: CloudinaryAsset): Brush = when {
     asset.isAudio -> Brush.linearGradient(
         listOf(AudioGradientStart, AudioGradientMid, AudioGradientEnd),
         start = Offset(0f, 0f), end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
     )
     asset.isVideo -> Brush.linearGradient(listOf(VideoGradientStart, VideoGradientEnd))
-    asset.isPdf   -> Brush.linearGradient(listOf(Color(0xFF1A0A0A), Color(0xFF3D0000)))
+    asset.isPdf   -> Brush.linearGradient(listOf(Color(0xFF1A0505), Color(0xFF3D0000)))
     asset.isImage -> Brush.linearGradient(listOf(ImageGradientStart, ImageGradientEnd))
     else          -> Brush.linearGradient(listOf(Color(0xFF0D1B2A), Color(0xFF1B3A4B)))
 }

@@ -32,6 +32,7 @@ import com.cloudinaryfiles.app.data.model.ProviderAuthType
 import com.cloudinaryfiles.app.data.model.ProviderDef
 import com.cloudinaryfiles.app.data.model.Providers
 import com.cloudinaryfiles.app.data.preferences.NamedAccount
+import com.cloudinaryfiles.app.data.preferences.AppOAuthSettings
 import com.cloudinaryfiles.app.data.preferences.UserPreferences
 import com.cloudinaryfiles.app.data.repository.BoxRepository
 import com.cloudinaryfiles.app.data.repository.DropboxRepository
@@ -60,6 +61,7 @@ fun SetupScreen(
     val prefs   = remember { UserPreferences(context) }
     val focus   = LocalFocusManager.current
     val savedAccounts by prefs.accounts.collectAsStateWithLifecycle(initialValue = emptyList())
+    val appOAuth by prefs.appOAuthSettings.collectAsStateWithLifecycle(initialValue = AppOAuthSettings())
 
     // Navigate to files if already connected (only on initial setup screen, not add/edit mode)
     LaunchedEffect(savedAccounts) {
@@ -87,6 +89,17 @@ fun SetupScreen(
     var oauthClientId     by remember { mutableStateOf("") }
     var oauthClientSecret by remember { mutableStateOf("") }
     var showOAuthHint by remember { mutableStateOf(true) }
+    val oauthPrefilled by remember(appOAuth, selectedProvider) {
+        derivedStateOf {
+            when (selectedProvider.key) {
+                "gdrive"    -> appOAuth.googleClientId.isNotBlank()
+                "dropbox"   -> appOAuth.dropboxAppKey.isNotBlank()
+                "onedrive"  -> appOAuth.onedriveClientId.isNotBlank()
+                "box"       -> appOAuth.boxClientId.isNotBlank()
+                else        -> false
+            }
+        }
+    }
 
     // WebDAV
     var webDavUrl  by remember { mutableStateOf("") }
@@ -134,6 +147,36 @@ fun SetupScreen(
             webDavUrl         = account.webDavUrl
             webDavUser        = account.webDavUser
             webDavPass        = account.webDavPass
+        }
+    }
+
+
+    // Auto-fill OAuth credentials from app-level settings when provider is selected
+    LaunchedEffect(selectedProvider, appOAuth) {
+        if (editAccountId != null) return@LaunchedEffect  // don't override edit mode fields
+        when (selectedProvider.key) {
+            "gdrive" -> {
+                if (oauthClientId.isBlank() && appOAuth.googleClientId.isNotBlank())
+                    oauthClientId = appOAuth.googleClientId
+                if (oauthClientSecret.isBlank() && appOAuth.googleClientSecret.isNotBlank())
+                    oauthClientSecret = appOAuth.googleClientSecret
+            }
+            "dropbox" -> {
+                if (oauthClientId.isBlank() && appOAuth.dropboxAppKey.isNotBlank())
+                    oauthClientId = appOAuth.dropboxAppKey
+                if (oauthClientSecret.isBlank() && appOAuth.dropboxAppSecret.isNotBlank())
+                    oauthClientSecret = appOAuth.dropboxAppSecret
+            }
+            "onedrive" -> {
+                if (oauthClientId.isBlank() && appOAuth.onedriveClientId.isNotBlank())
+                    oauthClientId = appOAuth.onedriveClientId
+            }
+            "box" -> {
+                if (oauthClientId.isBlank() && appOAuth.boxClientId.isNotBlank())
+                    oauthClientId = appOAuth.boxClientId
+                if (oauthClientSecret.isBlank() && appOAuth.boxClientSecret.isNotBlank())
+                    oauthClientSecret = appOAuth.boxClientSecret
+            }
         }
     }
 
@@ -548,6 +591,26 @@ fun SetupScreen(
                                                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                                                 }
                                             }
+                                        }
+                                    }
+                                }
+                                // Pre-filled from App Settings banner
+                                if (oauthPrefilled) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.primaryContainer.copy(0.4f),
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(Icons.Filled.AutoAwesome, null,
+                                                tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
+                                            Text("Credentials pre-filled from App Settings",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.primary)
                                         }
                                     }
                                 }

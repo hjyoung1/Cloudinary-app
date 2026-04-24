@@ -48,7 +48,10 @@ data class FilesUiState(
     val activeAccount: NamedAccount? = null,
     val selectedAssets: Set<String> = emptySet(),
     val isSelectionMode: Boolean = false,
-    val isGridView: Boolean = true
+    val isGridView: Boolean = true,
+    // Inline video playback (video plays in the card before going full-screen)
+    val inlineVideoId: String? = null,
+    val inlineVideoUrl: String? = null
 )
 
 class FilesViewModel(application: Application) : AndroidViewModel(application) {
@@ -272,6 +275,22 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun dismissViewer()                    { _state.update { it.copy(viewingAsset = null, viewingUrl = null) } }
+
+    /** Start inline video in the card — resolves auth URL first */
+    fun setInlineVideo(asset: CloudinaryAsset) {
+        val account = _state.value.activeAccount ?: run {
+            _state.update { it.copy(inlineVideoId = asset.assetId, inlineVideoUrl = asset.secureUrl) }
+            return
+        }
+        viewModelScope.launch {
+            val resolved = withContext(Dispatchers.IO) {
+                try { resolveStreamUrl(asset, account) } catch (_: Exception) { asset.secureUrl }
+            }
+            _state.update { it.copy(inlineVideoId = asset.assetId, inlineVideoUrl = resolved) }
+        }
+    }
+
+    fun clearInlineVideo() { _state.update { it.copy(inlineVideoId = null, inlineVideoUrl = null) } }
     fun openFilterSheet()                 { _state.update { it.copy(isFilterSheetOpen = true) } }
     fun closeFilterSheet()                { _state.update { it.copy(isFilterSheetOpen = false) } }
     fun applyFilter(f: FilterState) {

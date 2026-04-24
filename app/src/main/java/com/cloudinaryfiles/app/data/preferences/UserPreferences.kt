@@ -19,50 +19,65 @@ data class NamedAccount(
     val id: String,
     val name: String,
     val providerKey: String = "cloudinary",
-    // ── Cloudinary ──────────────────────────────────────────────────────────
     val cloudName: String = "",
     val apiKey: String = "",
     val apiSecret: String = "",
-    // ── S3-compatible ───────────────────────────────────────────────────────
-    val s3Endpoint: String = "",      // e.g. s3.amazonaws.com  or  minio.myhost.com:9000
+    val s3Endpoint: String = "",
     val s3Region: String = "us-east-1",
     val s3Bucket: String = "",
     val s3AccessKey: String = "",
     val s3SecretKey: String = "",
-    val s3ForcePathStyle: Boolean = false,  // needed for MinIO / custom endpoints
-    // ── OAuth2 (Google Drive, Dropbox, OneDrive, Box) ───────────────────────
+    val s3ForcePathStyle: Boolean = false,
     val oauthClientId: String = "",
-    val oauthClientSecret: String = "",  // required by Dropbox / Box
+    val oauthClientSecret: String = "",
     val oauthAccessToken: String = "",
     val oauthRefreshToken: String = "",
-    val oauthTokenExpiry: Long = 0L,     // epoch seconds
-    // ── WebDAV / basic auth ─────────────────────────────────────────────────
-    val webDavUrl: String = "",          // https://cloud.myhost.com/remote.php/dav/files/user
+    val oauthTokenExpiry: Long = 0L,
+    val webDavUrl: String = "",
     val webDavUser: String = "",
     val webDavPass: String = "",
-    // Folder paths/prefixes to exclude from listing (empty = include all)
-    val excludedFolders: List<String>? = null   // nullable so Gson missing field → null, not crash
+    val excludedFolders: List<String>? = null
 ) {
-    /** Always safe to use — returns empty list when field missing from old stored data */
     val safeExcludedFolders: List<String> get() = excludedFolders ?: emptyList()
-
     val isCloudinary get() = providerKey == "cloudinary"
-
     fun toCredentials(): CloudinaryCredentials? =
         if (isCloudinary) CloudinaryCredentials(cloudName, apiKey, apiSecret) else null
-
-    /** Stable display label */
     val displayLabel get() = name.ifBlank { providerKey }
 }
+
+/**
+ * App-level OAuth credentials — entered once in App Settings,
+ * shared across all accounts of that provider type.
+ */
+data class AppOAuthSettings(
+    val googleClientId: String = "",
+    val googleClientSecret: String = "",
+    val dropboxAppKey: String = "",
+    val dropboxAppSecret: String = "",
+    val onedriveClientId: String = "",
+    val boxClientId: String = "",
+    val boxClientSecret: String = ""
+)
 
 class UserPreferences(private val context: Context) {
 
     companion object {
+        // Legacy single-account keys
         private val KEY_CLOUD_NAME = stringPreferencesKey("cloud_name")
         private val KEY_API_KEY    = stringPreferencesKey("api_key")
         private val KEY_API_SECRET = stringPreferencesKey("api_secret")
+        // Multi-account store
         private val KEY_ACCOUNTS   = stringPreferencesKey("accounts_json")
         private val KEY_ACTIVE_ID  = stringPreferencesKey("active_account_id")
+        // App-level OAuth settings
+        private val KEY_APP_GOOGLE_CLIENT_ID     = stringPreferencesKey("app_google_client_id")
+        private val KEY_APP_GOOGLE_CLIENT_SECRET = stringPreferencesKey("app_google_client_secret")
+        private val KEY_APP_DROPBOX_KEY          = stringPreferencesKey("app_dropbox_key")
+        private val KEY_APP_DROPBOX_SECRET       = stringPreferencesKey("app_dropbox_secret")
+        private val KEY_APP_ONEDRIVE_CLIENT_ID   = stringPreferencesKey("app_onedrive_client_id")
+        private val KEY_APP_BOX_CLIENT_ID        = stringPreferencesKey("app_box_client_id")
+        private val KEY_APP_BOX_CLIENT_SECRET    = stringPreferencesKey("app_box_client_secret")
+
         private val gson = Gson()
         private val listType = object : TypeToken<List<NamedAccount>>() {}.type
     }
@@ -96,6 +111,34 @@ class UserPreferences(private val context: Context) {
 
     val credentials: Flow<CloudinaryCredentials?> = activeAccount.map { it?.toCredentials() }
 
+    // ── App OAuth Settings ────────────────────────────────────────────────────
+
+    val appOAuthSettings: Flow<AppOAuthSettings> = context.dataStore.data.map { prefs ->
+        AppOAuthSettings(
+            googleClientId     = prefs[KEY_APP_GOOGLE_CLIENT_ID] ?: "",
+            googleClientSecret = prefs[KEY_APP_GOOGLE_CLIENT_SECRET] ?: "",
+            dropboxAppKey      = prefs[KEY_APP_DROPBOX_KEY] ?: "",
+            dropboxAppSecret   = prefs[KEY_APP_DROPBOX_SECRET] ?: "",
+            onedriveClientId   = prefs[KEY_APP_ONEDRIVE_CLIENT_ID] ?: "",
+            boxClientId        = prefs[KEY_APP_BOX_CLIENT_ID] ?: "",
+            boxClientSecret    = prefs[KEY_APP_BOX_CLIENT_SECRET] ?: ""
+        )
+    }
+
+    suspend fun saveAppOAuthSettings(s: AppOAuthSettings) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_APP_GOOGLE_CLIENT_ID]     = s.googleClientId
+            prefs[KEY_APP_GOOGLE_CLIENT_SECRET] = s.googleClientSecret
+            prefs[KEY_APP_DROPBOX_KEY]          = s.dropboxAppKey
+            prefs[KEY_APP_DROPBOX_SECRET]       = s.dropboxAppSecret
+            prefs[KEY_APP_ONEDRIVE_CLIENT_ID]   = s.onedriveClientId
+            prefs[KEY_APP_BOX_CLIENT_ID]        = s.boxClientId
+            prefs[KEY_APP_BOX_CLIENT_SECRET]    = s.boxClientSecret
+        }
+    }
+
+    // ── Account CRUD ──────────────────────────────────────────────────────────
+
     suspend fun saveAccount(account: NamedAccount) {
         context.dataStore.edit { prefs ->
             val list: MutableList<NamedAccount> = if (!prefs[KEY_ACCOUNTS].isNullOrBlank())
@@ -108,7 +151,6 @@ class UserPreferences(private val context: Context) {
         }
     }
 
-    /** Patch only OAuth tokens in an existing account */
     suspend fun updateOAuthTokens(id: String, accessToken: String, refreshToken: String, expiryEpochSec: Long) {
         context.dataStore.edit { prefs ->
             val j = prefs[KEY_ACCOUNTS] ?: return@edit

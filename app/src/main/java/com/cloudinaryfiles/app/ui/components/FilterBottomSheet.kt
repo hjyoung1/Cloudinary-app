@@ -30,7 +30,9 @@ import androidx.compose.ui.unit.sp
 import com.cloudinaryfiles.app.data.model.*
 import com.cloudinaryfiles.app.ui.theme.AudioAccent
 import com.cloudinaryfiles.app.ui.theme.AudioAccent2
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -49,10 +51,10 @@ fun FilterBottomSheet(
     var showEndTimePicker   by remember { mutableStateOf(false) }
 
     val startDateState = rememberDatePickerState(
-        initialSelectedDateMillis = draft.dateRangeStart?.toLocalDate()?.toEpochDay()?.times(86_400_000L)
+        initialSelectedDateMillis = draft.dateRangeStart?.toLocalDate()?.atStartOfDay(ZoneId.systemDefault())?.toInstant()?.toEpochMilli()
     )
     val endDateState = rememberDatePickerState(
-        initialSelectedDateMillis = draft.dateRangeEnd?.toLocalDate()?.toEpochDay()?.times(86_400_000L)
+        initialSelectedDateMillis = draft.dateRangeEnd?.toLocalDate()?.atStartOfDay(ZoneId.systemDefault())?.toInstant()?.toEpochMilli()
     )
     val startTimeState = rememberTimePickerState(
         initialHour = draft.dateRangeStart?.hour ?: 0,
@@ -380,7 +382,7 @@ fun FilterBottomSheet(
             confirmButton = {
                 TextButton(onClick = {
                     startDateState.selectedDateMillis?.let { ms ->
-                        val d = LocalDate.ofEpochDay(ms / 86_400_000L)
+                        val d = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).toLocalDate()
                         draft = draft.copy(dateRangeStart = LocalDateTime.of(d, LocalTime.of(0, 0)))
                     }
                     showStartDatePicker = false
@@ -396,7 +398,7 @@ fun FilterBottomSheet(
             confirmButton = {
                 TextButton(onClick = {
                     endDateState.selectedDateMillis?.let { ms ->
-                        val d = LocalDate.ofEpochDay(ms / 86_400_000L)
+                        val d = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).toLocalDate()
                         draft = draft.copy(dateRangeEnd = LocalDateTime.of(d, LocalTime.of(23, 59)))
                     }
                     showEndDatePicker = false
