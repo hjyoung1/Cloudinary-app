@@ -61,6 +61,7 @@ fun FileViewerScreen(
     asset: CloudinaryAsset,
     resolvedUrl: String?,
     resolvedHeaders: Map<String, String>? = null,
+    startPositionMs: Long = 0L,
     onDismiss: () -> Unit
 ) {
     BackHandler(enabled = true) { onDismiss() }
@@ -75,9 +76,13 @@ fun FileViewerScreen(
     ) {
         when {
             asset.isImage     -> ImageViewer(url = url, asset = asset, headers = resolvedHeaders, onDismiss = onDismiss)
-            asset.isVideo     -> VideoViewer(url = url, asset = asset, headers = resolvedHeaders, onDismiss = onDismiss)
+            asset.isVideo     -> VideoViewer(url = url, asset = asset, headers = resolvedHeaders, startPositionMs = startPositionMs, onDismiss = onDismiss)
             asset.isPdf       -> PdfViewer(url = url, asset = asset, onDismiss = onDismiss, context = context)
-            isTextFile(asset) -> TextViewer(url = url, asset = asset, onDismiss = onDismiss)
+            isTextFile(asset) -> TextViewer(url = url, asset = asset, headers = resolvedHeaders, onDismiss = onDismiss)
+            asset.format.lowercase() in setOf("zip","rar","7z","tar","gz","bz2","xz") -> {
+                // Archive: cannot preview, offer to open externally
+                ArchivePreview(asset = asset, url = url, onDismiss = onDismiss, context = context)
+            }
             else -> {
                 LaunchedEffect(Unit) { openWithSystem(context, url); onDismiss() }
                 Box(Modifier.fillMaxSize().background(SurfaceDark), contentAlignment = Alignment.Center) {
@@ -184,7 +189,7 @@ private fun ImageViewer(url: String, asset: CloudinaryAsset, headers: Map<String
 // ── Video viewer ──────────────────────────────────────────────────────────────
 
 @Composable
-private fun VideoViewer(url: String, asset: CloudinaryAsset, headers: Map<String, String>? = null, onDismiss: () -> Unit) {
+private fun VideoViewer(url: String, asset: CloudinaryAsset, headers: Map<String, String>? = null, startPositionMs: Long = 0L, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val exoPlayer = remember(url, headers) {
         val dsFactory = if (headers != null) {
@@ -205,10 +210,11 @@ private fun VideoViewer(url: String, asset: CloudinaryAsset, headers: Map<String
         ExoPlayer.Builder(context).build().apply {
             setMediaSource(src)
             prepare()
+            if (startPositionMs > 0L) seekTo(startPositionMs)
             playWhenReady = true
         }
     }
-    DisposableEffect(url, headers) { onDispose { exoPlayer.release() } }
+    DisposableEffect(url, headers, startPositionMs) { onDispose { exoPlayer.release() } }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         androidx.compose.ui.viewinterop.AndroidView(
@@ -402,14 +408,19 @@ private fun PdfViewer(url: String, asset: CloudinaryAsset, onDismiss: () -> Unit
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TextViewer(url: String, asset: CloudinaryAsset, onDismiss: () -> Unit) {
+private fun TextViewer(url: String, asset: CloudinaryAsset, headers: Map<String, String>? = null, onDismiss: () -> Unit) {
     var text by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(url) {
         try {
-            text = withContext(Dispatchers.IO) { URL(url).readText(Charsets.UTF_8) }
+            text = withContext(Dispatchers.IO) {
+                    val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                    headers?.forEach { (k, v) -> conn.setRequestProperty(k, v) }
+                    conn.connect()
+                    conn.inputStream.reader(Charsets.UTF_8).readText()
+                }
         } catch (e: Exception) { error = "Could not load: ${e.message}" }
         finally { isLoading = false }
     }
@@ -467,4 +478,56 @@ private fun openUrlInBrowser(context: Context, url: String) {
     try {
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
     } catch (_: Exception) {}
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ArchivePreview(asset: CloudinaryAsset, url: String, onDismiss: () -> Unit, context: Context) {
+    Column(Modifier.fillMaxSize().background(Color(0xFF0E0C1C))) {
+        TopAppBar(
+            title = {
+                Column {
+                    Text(asset.displayTitle, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.White, maxLines = 1)
+                    Text("${asset.format.uppercase()} Archive · ${asset.formattedSize}", fontSize = 10.sp, color = Color.White.copy(0.6f))
+                }
+            },
+            navigationIcon = { IconButton(onClick = onDismiss) { Icon(Icons.Filled.ArrowBack, "Back", tint = Color.White) } },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0E0C1C))
+        )
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.padding(32.dp)
+            ) {
+                Surface(
+                    color = Color.White.copy(0.06f),
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.size(88.dp)
+                ) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Outlined.FolderZip, null, tint = Color(0xFFFFD54F),
+                            modifier = Modifier.size(44.dp))
+                    }
+                }
+                Text("Cannot preview archives", color = Color.White,
+                    style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    "${asset.format.uppercase()} archive files can't be previewed in-app.
+Open with an external app to browse the contents.",
+                    color = Color.White.copy(0.6f), fontSize = 13.sp,
+                    textAlign = TextAlign.Center, lineHeight = 18.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { openWithSystem(context, url) },
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Icon(Icons.Outlined.OpenInNew, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Open with…")
+                }
+            }
+        }
+    }
 }

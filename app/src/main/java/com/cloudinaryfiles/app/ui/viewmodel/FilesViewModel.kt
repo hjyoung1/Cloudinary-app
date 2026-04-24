@@ -54,8 +54,11 @@ data class FilesUiState(
     val inlineVideoId: String? = null,
     val inlineVideoUrl: String? = null,
     val inlineVideoHeaders: Map<String, String>? = null,
+    val inlineVideoPlayer: androidx.media3.exoplayer.ExoPlayer? = null,  // ViewModel-owned player
     val viewingHeaders: Map<String, String>? = null,
-    val accountHeaders: Map<String, String>? = null  // Auth headers for current account (e.g. GDrive Bearer)
+    val viewingStartPositionMs: Long = 0L,
+    val accountHeaders: Map<String, String>? = null,
+    val availableFolders: List<String> = emptyList()  // All unique top-level folders
 )
 
 class FilesViewModel(application: Application) : AndroidViewModel(application) {
@@ -113,7 +116,8 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
                     if (!cached.isNullOrEmpty()) {
                         AppLogger.i(LOG, "Cache HIT — ${cached.size} assets restored from disk cache")
                         val hdrs = try { resolveAccountHeaders(account) } catch (_: Exception) { null }
-                        _state.update { it.copy(allAssets = cached, isLoading = false, accountHeaders = hdrs) }
+                        val folders = cached.map { a -> a.publicId.substringBeforeLast("/", missingDelimiterValue = "").let { p -> if (p.isEmpty()) "(root)" else p } }.distinct().sorted()
+                    _state.update { it.copy(allAssets = cached, isLoading = false, accountHeaders = hdrs, availableFolders = folders) }
                         reFilter()
                     } else {
                         AppLogger.i(LOG, "Cache MISS — fetching from provider…")
@@ -283,25 +287,66 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
             _state.update { it.copy(viewingAsset = asset, viewingUrl = resolved, viewingHeaders = headers) }
         }
     }
-    fun dismissViewer()                    { _state.update { it.copy(viewingAsset = null, viewingUrl = null) } }
+    fun dismissViewer()                    { _state.update { it.copy(viewingAsset = null, viewingUrl = null, viewingStartPositionMs = 0L) } }
 
-    /** Start inline video in the card — resolves auth URL and headers first */
-    fun setInlineVideo(asset: CloudinaryAsset) {
-        val account = _state.value.activeAccount ?: run {
-            _state.update { it.copy(inlineVideoId = asset.assetId, inlineVideoUrl = asset.secureUrl, inlineVideoHeaders = null) }
-            return
-        }
+    fun openFileAtPosition(asset: CloudinaryAsset, positionMs: Long) {
+        val account = _state.value.activeAccount
         viewModelScope.launch {
             val (resolved, headers) = withContext(Dispatchers.IO) {
-                val url = try { resolveStreamUrl(asset, account) } catch (_: Exception) { asset.secureUrl }
-                val hdrs = try { resolveAuthHeaders(asset, account) } catch (_: Exception) { null }
+                val url = if (account != null) try { resolveStreamUrl(asset, account) } catch (_: Exception) { asset.secureUrl } else asset.secureUrl
+                val hdrs = if (account != null) try { resolveAuthHeaders(asset, account) } catch (_: Exception) { null } else null
                 url to hdrs
             }
-            _state.update { it.copy(inlineVideoId = asset.assetId, inlineVideoUrl = resolved, inlineVideoHeaders = headers) }
+            _state.update { it.copy(viewingAsset = asset, viewingUrl = resolved, viewingHeaders = headers, viewingStartPositionMs = positionMs) }
         }
     }
 
-    fun clearInlineVideo() { _state.update { it.copy(inlineVideoId = null, inlineVideoUrl = null, inlineVideoHeaders = null) } }
+    /** Start inline video in the card — creates a ViewModel-owned ExoPlayer so seek pos survives fullscreen */
+    fun setInlineVideo(asset: CloudinaryAsset) {
+        val account = _state.value.activeAccount
+        viewModelScope.launch {
+            val (resolved, headers) = withContext(Dispatchers.IO) {
+                val url = if (account != null) try { resolveStreamUrl(asset, account) } catch (_: Exception) { asset.secureUrl } else asset.secureUrl
+                val hdrs = if (account != null) try { resolveAuthHeaders(asset, account) } catch (_: Exception) { null } else null
+                url to hdrs
+            }
+            // Release previous player if switching to different asset
+            val prevPlayer = _state.value.inlineVideoPlayer
+            if (_state.value.inlineVideoId != asset.assetId) {
+                prevPlayer?.release()
+            }
+            // Create OkHttp-backed player if headers needed, otherwise default
+            val app = prefs.context
+            val player = if (headers != null) {
+                val okClient = okhttp3.OkHttpClient.Builder()
+                    .addInterceptor { chain ->
+                        chain.proceed(chain.request().newBuilder().apply { headers.forEach { (k,v) -> header(k,v) } }.build())
+                    }.build()
+                val dsFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okClient)
+                val src = androidx.media3.exoplayer.source.ProgressiveMediaSource.Factory(dsFactory)
+                    .createMediaSource(androidx.media3.common.MediaItem.fromUri(resolved))
+                androidx.media3.exoplayer.ExoPlayer.Builder(app).build().apply {
+                    setMediaSource(src); prepare(); playWhenReady = true
+                }
+            } else {
+                androidx.media3.exoplayer.ExoPlayer.Builder(app).build().apply {
+                    setMediaItem(androidx.media3.common.MediaItem.fromUri(resolved))
+                    prepare(); playWhenReady = true
+                }
+            }
+            _state.update { it.copy(
+                inlineVideoId = asset.assetId,
+                inlineVideoUrl = resolved,
+                inlineVideoHeaders = headers,
+                inlineVideoPlayer = player
+            )}
+        }
+    }
+
+    fun clearInlineVideo() {
+        _state.value.inlineVideoPlayer?.release()
+        _state.update { it.copy(inlineVideoId = null, inlineVideoUrl = null, inlineVideoHeaders = null, inlineVideoPlayer = null) }
+    }
     fun openFilterSheet()                 { _state.update { it.copy(isFilterSheetOpen = true) } }
     fun closeFilterSheet()                { _state.update { it.copy(isFilterSheetOpen = false) } }
     fun applyFilter(f: FilterState) {
@@ -622,7 +667,28 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun toggleFolderExclusion(folder: String) {
+        val current = _state.value.filterState.excludedFolders.toMutableSet()
+        if (folder in current) current.remove(folder) else current.add(folder)
+        applyFilter(_state.value.filterState.copy(excludedFolders = current))
+    }
+
+    fun setFolderExclusions(excluded: Set<String>) {
+        applyFilter(_state.value.filterState.copy(excludedFolders = excluded))
+    }
+
+    private fun computeAvailableFolders(): List<String> {
+        return _state.value.allAssets
+            .map { asset ->
+                val path = asset.publicId.substringBeforeLast("/", missingDelimiterValue = "")
+                if (path.isEmpty()) "(root)" else path
+            }
+            .distinct()
+            .sorted()
+    }
+
     override fun onCleared() {
+        _state.value.inlineVideoPlayer?.release()
         AppLogger.i(LOG, "onCleared() — releasing ExoPlayer")
         super.onCleared()
         player?.release()

@@ -44,6 +44,7 @@ import com.cloudinaryfiles.app.ui.components.SelectionToolbar
 import com.cloudinaryfiles.app.ui.components.formatDurationSec
 import com.cloudinaryfiles.app.ui.theme.*
 import com.cloudinaryfiles.app.ui.viewmodel.FilesViewModel
+import androidx.compose.ui.text.font.FontFamily
 import kotlinx.coroutines.launch
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -78,6 +79,7 @@ fun FilesScreen(
     val isAudioPlaying = state.currentlyPlayingId != null
     var showAppSettings by remember { mutableStateOf(false) }
     var actionSheetAsset by remember { mutableStateOf<com.cloudinaryfiles.app.data.model.CloudinaryAsset?>(null) }
+    var showFolderFilter by remember { mutableStateOf(false) }
     val appPrefs = remember { UserPreferences(context) }
 
     // Handle back: dismiss viewer → clear selection → then default (exit app)
@@ -345,6 +347,17 @@ fun FilesScreen(
                             }
                         },
                         actions = {
+                            // Folder filter button
+                            val excludedCount = state.filterState.excludedFolders.size
+                            IconButton(onClick = { showFolderFilter = true }) {
+                                BadgedBox(badge = {
+                                    if (excludedCount > 0) Badge { Text("$excludedCount") }
+                                }) {
+                                    Icon(Icons.Outlined.FolderOpen, "Folder filter",
+                                        tint = if (excludedCount > 0) MaterialTheme.colorScheme.primary
+                                               else MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
                             if (state.filterState.activeFilterCount > 0) {
                                 Surface(
                                     color = MaterialTheme.colorScheme.primary.copy(0.2f),
@@ -411,11 +424,13 @@ fun FilesScreen(
                                         isSelectionMode = state.isSelectionMode,
                                         isInlineVideoActive = state.inlineVideoId == asset.assetId,
                                         inlineVideoUrl = if (state.inlineVideoId == asset.assetId) state.inlineVideoUrl else null,
+                                        inlineVideoPlayer = if (state.inlineVideoId == asset.assetId) state.inlineVideoPlayer else null,
                                         authHeaders = if (state.inlineVideoId == asset.assetId) state.inlineVideoHeaders ?: state.accountHeaders else state.accountHeaders,
                                         onInlineVideoStop = { vm.clearInlineVideo() },
                                         onInlineVideoFullScreen = {
+                                            val seekMs = state.inlineVideoPlayer?.currentPosition ?: 0L
+                                            vm.openFileAtPosition(asset, seekMs)
                                             vm.clearInlineVideo()
-                                            vm.openFile(asset)
                                         },
                                         onPlayClick = {
                                             if (asset.isVideo) vm.setInlineVideo(asset)
@@ -467,6 +482,7 @@ fun FilesScreen(
                     asset = state.viewingAsset!!,
                     resolvedUrl = state.viewingUrl,
                     resolvedHeaders = state.viewingHeaders,
+                    startPositionMs = state.viewingStartPositionMs,
                     onDismiss = { vm.dismissViewer() }
                 )
             }
@@ -522,6 +538,17 @@ fun FilesScreen(
             current = state.filterState,
             onApply = { vm.applyFilter(it) },
             onDismiss = { vm.closeFilterSheet() }
+        )
+    }
+
+    // Folder filter sheet
+    if (showFolderFilter) {
+        FolderFilterSheet(
+            folders = state.availableFolders,
+            excludedFolders = state.filterState.excludedFolders,
+            onToggle = { vm.toggleFolderExclusion(it) },
+            onClearAll = { vm.setFolderExclusions(emptySet()) },
+            onDismiss = { showFolderFilter = false }
         )
     }
 
@@ -1378,6 +1405,115 @@ private fun ActionSheetItem(
         ) {
             Icon(icon, null, tint = tint, modifier = Modifier.size(22.dp))
             Text(label, style = MaterialTheme.typography.bodyMedium, color = tint, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+// ── Folder Filter Sheet ───────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FolderFilterSheet(
+    folders: List<String>,
+    excludedFolders: Set<String>,
+    onToggle: (String) -> Unit,
+    onClearAll: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF12101E),
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        dragHandle = {
+            Box(Modifier.padding(top = 12.dp, bottom = 4.dp).width(36.dp).height(4.dp)
+                .clip(RoundedCornerShape(2.dp)).background(Color.White.copy(0.2f)))
+        }
+    ) {
+        Column(
+            Modifier.fillMaxWidth().navigationBarsPadding()
+        ) {
+            // Header
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Outlined.FolderOpen, null, tint = Color(0xFFA29BFE),
+                    modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Folder Visibility", style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("Toggle folders to show or hide their files",
+                        style = MaterialTheme.typography.bodySmall, color = Color.White.copy(0.5f))
+                }
+                if (excludedFolders.isNotEmpty()) {
+                    TextButton(onClick = onClearAll) {
+                        Text("Show All", color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+
+            HorizontalDivider(color = Color.White.copy(0.08f))
+
+            if (folders.isEmpty()) {
+                Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                    Text("No folders found", color = Color.White.copy(0.4f))
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp),
+                    contentPadding = PaddingValues(vertical = 8.dp)
+                ) {
+                    items(folders) { folder ->
+                        val isExcluded = folder in excludedFolders
+                        Surface(
+                            onClick = { onToggle(folder) },
+                            color = Color.Transparent,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                Icon(
+                                    if (isExcluded) Icons.Outlined.FolderOff else Icons.Filled.Folder,
+                                    null,
+                                    tint = if (isExcluded) Color.White.copy(0.3f) else Color(0xFFFFD54F),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = folder,
+                                    color = if (isExcluded) Color.White.copy(0.35f) else Color.White.copy(0.9f),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 12.sp
+                                )
+                                Switch(
+                                    checked = !isExcluded,
+                                    onCheckedChange = { onToggle(folder) },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Color.White,
+                                        checkedTrackColor = Color(0xFF6C3CE1),
+                                        uncheckedThumbColor = Color.White.copy(0.4f),
+                                        uncheckedTrackColor = Color.White.copy(0.12f)
+                                    ),
+                                    modifier = Modifier.scale(0.8f)
+                                )
+                            }
+                        }
+                        HorizontalDivider(
+                            color = Color.White.copy(0.05f),
+                            modifier = Modifier.padding(horizontal = 20.dp)
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
         }
     }
 }

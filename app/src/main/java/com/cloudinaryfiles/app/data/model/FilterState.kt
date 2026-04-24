@@ -48,7 +48,8 @@ data class FilterState(
     // Duration filter (seconds)
     val minDurationSec: Float = 0f,
     val maxDurationSec: Float = 600f,
-    val isDurationFilterEnabled: Boolean = false
+    val isDurationFilterEnabled: Boolean = false,
+    val excludedFolders: Set<String> = emptySet()
 ) {
     val activeFilterCount: Int
         get() {
@@ -60,6 +61,7 @@ data class FilterState(
             if (sortBy != SortBy.NEWEST_FIRST) count++
             if (isSizeFilterEnabled) count++
             if (isDurationFilterEnabled) count++
+            if (excludedFolders.isNotEmpty()) count++
             return count
         }
 

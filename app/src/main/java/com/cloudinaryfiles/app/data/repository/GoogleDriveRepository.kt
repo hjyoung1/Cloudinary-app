@@ -192,34 +192,42 @@ class GoogleDriveRepository {
 
     fun freshToken(account: NamedAccount): String? {
         AppLogger.d(LOG, "freshToken(): checking token validity…")
-
         if (account.oauthAccessToken.isBlank()) {
             AppLogger.w(LOG, "freshToken(): oauthAccessToken is blank → returning null")
             return null
         }
+        val now = System.currentTimeMillis() / 1000
+
+        // Check in-memory cache first (avoids token endpoint on every file open)
+        tokenCache[account.id]?.let { (cachedToken, cachedExpiry) ->
+            if (now < cachedExpiry - 60) {
+                AppLogger.d(LOG, "freshToken(): using cached token (expires in ${cachedExpiry - now}s)")
+                return cachedToken
+            }
+            AppLogger.d(LOG, "freshToken(): cached token expired, need refresh")
+        }
 
         val expiry = account.oauthTokenExpiry
-        val now    = System.currentTimeMillis() / 1000
-
-        AppLogger.d(LOG, "freshToken(): expiry=$expiry now=$now diff=${expiry - now}s")
+        AppLogger.d(LOG, "freshToken(): stored expiry=$expiry now=$now diff=${expiry - now}s")
 
         if (expiry == 0L || now < expiry - 60) {
-            AppLogger.d(LOG, "freshToken(): token still valid, returning existing token")
+            AppLogger.d(LOG, "freshToken(): stored token still valid — caching and returning")
+            tokenCache[account.id] = account.oauthAccessToken to (if (expiry == 0L) now + 3500L else expiry)
             return account.oauthAccessToken
         }
 
-        AppLogger.i(LOG, "freshToken(): token is expired — attempting refresh…")
+        AppLogger.i(LOG, "freshToken(): token expired — refreshing…")
         if (account.oauthRefreshToken.isBlank()) {
-            AppLogger.w(LOG, "freshToken(): no refresh token available → returning existing (expired) token as fallback")
+            AppLogger.w(LOG, "freshToken(): no refresh token → returning existing as fallback")
             return account.oauthAccessToken
         }
-
         return try {
-            val newToken = refreshToken(account)
-            AppLogger.i(LOG, "freshToken(): token refreshed successfully (new len=${newToken.length})")
+            val (newToken, newExpiry) = refreshTokenFull(account)
+            AppLogger.i(LOG, "freshToken(): refreshed OK (len=${newToken.length}, newExpiry=$newExpiry)")
+            tokenCache[account.id] = newToken to newExpiry
             newToken
         } catch (e: Exception) {
-            AppLogger.e(LOG, "freshToken(): token refresh FAILED, returning existing token as fallback", e)
+            AppLogger.e(LOG, "freshToken(): refresh FAILED → returning stale token", e)
             account.oauthAccessToken
         }
     }
@@ -270,7 +278,7 @@ class GoogleDriveRepository {
         }
     }
 
-    private fun refreshToken(account: NamedAccount): String {
+    private fun refreshTokenFull(account: NamedAccount): Pair<String, Long> {
         AppLogger.i(LOG, "refreshToken(): calling Google token endpoint…")
         return withRetryBlocking(maxAttempts = 2) { attempt ->
             AppLogger.d(LOG, "refreshToken(): attempt $attempt")
@@ -280,24 +288,23 @@ class GoogleDriveRepository {
                 .add("refresh_token", account.oauthRefreshToken)
                 .add("grant_type",    "refresh_token")
                 .build()
-
             val t0 = System.currentTimeMillis()
             AppLogger.request(LOG, "POST", TOKEN_URL)
             val resp     = client.newCall(Request.Builder().url(TOKEN_URL).post(body).build()).execute()
             val elapsed  = System.currentTimeMillis() - t0
             val respBody = resp.body?.use { it.string() } ?: ""
             AppLogger.response(LOG, "POST", TOKEN_URL, resp.code, respBody.take(400), elapsed)
-
             val json = JSONObject(respBody)
             if (!resp.isSuccessful) {
                 val err = json.optString("error_description", "Refresh failed (HTTP ${resp.code})")
                 AppLogger.e(LOG, "refreshToken(): FAILED — $err")
                 throw Exception(err)
             }
-
-            val newToken = json.getString("access_token")
-            AppLogger.i(LOG, "refreshToken(): new token obtained (len=${newToken.length})")
-            newToken
+            val newToken  = json.getString("access_token")
+            val expiresIn = json.optLong("expires_in", 3599L)
+            val newExpiry = System.currentTimeMillis() / 1000 + expiresIn
+            AppLogger.i(LOG, "refreshToken(): new token (len=${newToken.length}, expiry=$newExpiry)")
+            newToken to newExpiry
         }
     }
 
