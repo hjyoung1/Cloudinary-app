@@ -219,7 +219,7 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun resolveStreamUrl(asset: CloudinaryAsset, account: NamedAccount): String {
+    private suspend fun resolveStreamUrl(asset: CloudinaryAsset, account: NamedAccount): String {
         val provider = Providers.find(account.providerKey)
         AppLogger.d(LOG, "resolveStreamUrl(): provider=${provider.key}, authType=${provider.authType}")
 
