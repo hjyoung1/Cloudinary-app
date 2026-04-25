@@ -324,7 +324,7 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
                 prevPlayer?.release()
             }
             // Create OkHttp-backed player if headers needed, otherwise default
-            val app = application
+            val app = getApplication()
             val player = if (headers != null) {
                 val okClient = okhttp3.OkHttpClient.Builder()
                     .addInterceptor { chain ->
