@@ -61,6 +61,7 @@ fun FilesScreen(
     onNavigateToSetup: () -> Unit,
     onAddAccount: () -> Unit,
     onEditAccount: (String) -> Unit,
+    onNavigateToSettings: () -> Unit, // <--- Add this exact line here!
     vm: FilesViewModel = viewModel()
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
