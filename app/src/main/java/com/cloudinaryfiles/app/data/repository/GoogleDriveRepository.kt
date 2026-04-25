@@ -16,7 +16,6 @@ import java.util.concurrent.TimeUnit
 class GoogleDriveRepository {
 
     private val LOG = "GDriveRepo"
-    private val tokenCache = mutableMapOf<String, Pair<String, Long>>()
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -40,6 +39,12 @@ class GoogleDriveRepository {
 
         private fun encode(s: String) = java.net.URLEncoder.encode(s, "UTF-8")
     }
+
+    // In-memory token cache: accountId -> Pair(accessToken, expiryEpochSec)
+    private val tokenCache = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Long>>()
+
+    // Folder ID -> folder name cache for breadcrumb paths
+    private val folderNameCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     fun fetchAllAssets(account: NamedAccount): Flow<RepositoryResult> = flow {
         AppLogger.i(LOG, "══ fetchAllAssets START ══════════════════════════════════")
@@ -78,7 +83,7 @@ class GoogleDriveRepository {
                     append("https://www.googleapis.com/drive/v3/files")
                     append("?q=trashed%3Dfalse")
                     append("&pageSize=1000")
-                    append("&fields=nextPageToken,files(id,name,mimeType,size,createdTime,modifiedTime,parents,videoMediaMetadata,thumbnailLink,hasThumbnail)")
+                    append("&fields=nextPageToken,files(id,name,mimeType,size,createdTime,modifiedTime,parents,videoMediaMetadata,thumbnailLink,hasThumbnail,webViewLink)")
                     if (pageToken != null) append("&pageToken=$pageToken")
                 }
                 AppLogger.d(LOG, "Fetching page $pageNum — pageToken=${pageToken?.take(20)?.plus("…") ?: "null"}")
@@ -99,6 +104,12 @@ class GoogleDriveRepository {
                 for (i in 0 until files.length()) {
                     val f = files.getJSONObject(i)
                     val mime = f.optString("mimeType")
+                    if (mime == "application/vnd.google-apps.folder") {
+                        // Cache folder names for path resolution
+                        folderNameCache[f.getString("id")] = f.optString("name", "")
+                        skippedGoogleDocs++
+                        continue
+                    }
                     if (mime.startsWith("application/vnd.google-apps")) {
                         skippedGoogleDocs++
                         continue
@@ -113,12 +124,16 @@ class GoogleDriveRepository {
                     val ext     = name.substringAfterLast(".", "").lowercase()
                     val size    = f.optLong("size", 0L)
                     val created = f.optString("createdTime")
-                    // secureUrl = clean URL, no embedded token (auth via header at play time)
-                    val streamUrl = "https://www.googleapis.com/drive/v3/files/$id?alt=media"
+                    // streamUrl = clean API URL (no token; auth via header at play time)
+                    val streamUrl   = "https://www.googleapis.com/drive/v3/files/$id?alt=media"
+                    val webViewLink = f.optString("webViewLink", "")  // used for copy-link
                     val thumbLink = f.optString("thumbnailLink", "").let { lnk ->
-                        // Google sends s220 thumbnails; upgrade to s800 for better quality
                         if (lnk.isNotBlank()) lnk.replace("=s220", "=s800") else lnk
                     }
+                    // Build path-like publicId from parent folder name (best-effort)
+                    val parentId  = f.optJSONArray("parents")?.optString(0, "") ?: ""
+                    val parentName = if (parentId.isNotBlank()) folderNameCache[parentId] ?: parentId.take(8) else ""
+                    val pathLikeId = if (parentName.isNotBlank()) "$parentName/$id" else id
 
                     val mediaMeta = f.optJSONObject("videoMediaMetadata")
                     val durationMs = mediaMeta?.optLong("durationMillis", 0L) ?: 0L
@@ -129,14 +144,14 @@ class GoogleDriveRepository {
 
                     allAssets += CloudinaryAsset(
                         assetId      = "gdrive:$id",
-                        publicId     = id,
+                        publicId     = pathLikeId,     // "FolderName/fileId" for folder grouping
                         format       = ext,
                         resourceType = resourceType,
                         type         = "upload",
                         createdAt    = created,
                         bytes        = size,
                         url          = streamUrl,
-                        secureUrl    = streamUrl,
+                        secureUrl    = if (webViewLink.isNotBlank()) webViewLink else streamUrl,
                         thumbnailUrl = thumbLink,
                         displayName  = name.substringBeforeLast("."),
                         duration     = durationSec

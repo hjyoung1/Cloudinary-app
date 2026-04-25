@@ -192,6 +192,26 @@ fun FileCard(
                         }
                     }
 
+                    // Format badge — top-left (always shown, even without thumbnail)
+                    if (!isInlineVideoActive && !isSelectionMode) {
+                        Surface(
+                            modifier = Modifier.align(Alignment.TopStart).padding(7.dp),
+                            color = Color.Black.copy(0.62f),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Row(
+                                Modifier.padding(horizontal = 5.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                val fmt = asset.format.uppercase().let { if (it.length > 5) it.take(5) else it }
+                                Text(fmt, color = formatBadgeColor(asset),
+                                    fontSize = 9.sp, fontWeight = FontWeight.ExtraBold,
+                                    fontFamily = FontFamily.Monospace)
+                            }
+                        }
+                    }
+
                     // Duration badge top-right (skip inline + selection mode)
                     if (durationText != null && !isInlineVideoActive && !isSelectionMode) {
                         Surface(
@@ -231,7 +251,7 @@ fun FileCard(
                                     Color(0xFF6C3CE1).copy(0.92f)
                                 else
                                     Color.White.copy(0.88f),
-                                modifier = Modifier.size(46.dp),
+                                modifier = Modifier.size(54.dp),
                                 shadowElevation = 4.dp
                             ) {
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -254,21 +274,7 @@ fun FileCard(
                         .padding(start = 10.dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Format pill on the left
-                    Surface(
-                        color = formatBadgeColor(asset).copy(0.18f),
-                        shape = RoundedCornerShape(5.dp),
-                        modifier = Modifier.padding(end = 6.dp)
-                    ) {
-                        Text(
-                            text = asset.format.uppercase().take(4),
-                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = formatBadgeColor(asset),
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 8.sp
-                        )
-                    }
+
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = asset.displayTitle,
@@ -310,13 +316,19 @@ private fun ThumbnailContent(
 ) {
     // Videos: never show thumbnail, always show gradient (avoid spoilers + perf)
     // Images: show actual image filling the card
-    val showImage = !asset.isVideo && asset.resolvedThumbnailUrl.isNotEmpty()
     val isCloudinary = asset.secureUrl.contains("cloudinary.com")
+    val isGDriveWeb  = asset.secureUrl.contains("drive.google.com")
+    // imageUrl: prefer thumbnail, then direct URL for images (with auth when needed)
     val imageUrl = when {
         asset.resolvedThumbnailUrl.isNotEmpty() -> asset.resolvedThumbnailUrl
-        isCloudinary && asset.isImage           -> asset.secureUrl
-        else                                    -> ""
+        isCloudinary && asset.isImage           -> asset.secureUrl  // Cloudinary CDN = public
+        !asset.isVideo && asset.isImage && !isGDriveWeb -> {
+            // Dropbox/WebDAV: use secureUrl with auth headers
+            if (authHeaders != null) asset.secureUrl else asset.resolvedThumbnailUrl
+        }
+        else -> ""
     }
+    val showImage = !asset.isVideo && imageUrl.isNotEmpty()
 
     // Gradient background always rendered (shows under loading/error states)
     Box(Modifier.fillMaxSize().background(assetGradient(asset)))

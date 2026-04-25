@@ -82,7 +82,7 @@ data class CloudinaryAsset(
                 // Cloudinary can render PDF page 1 as an image
                 return secureUrl
                     .replace("image/upload/", "image/upload/w_400,h_240,c_fill,q_70,pg_1/")
-                    .replace(Regex("\\.pdf\$", RegexOption.IGNORE_CASE), ".jpg")
+                    .replace(".pdf", ".jpg", ignoreCase = true)
             }
             return ""
         }

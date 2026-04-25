@@ -138,7 +138,15 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
         AppLogger.i(LOG, "switchAccount($id)")
         viewModelScope.launch {
             stopPlayback()
-            _state.update { it.copy(allAssets = emptyList(), filteredAssets = emptyList()) }
+            clearInlineVideo()
+            // Reset filters and assets when switching accounts
+            _state.update { it.copy(
+                allAssets      = emptyList(),
+                filteredAssets = emptyList(),
+                filterState    = com.cloudinaryfiles.app.data.model.FilterState(),
+                availableFolders = emptyList(),
+                accountHeaders = null
+            )}
             prefs.setActiveAccount(id)
         }
     }
@@ -211,7 +219,7 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun resolveStreamUrl(asset: CloudinaryAsset, account: NamedAccount): String {
+    private fun resolveStreamUrl(asset: CloudinaryAsset, account: NamedAccount): String {
         val provider = Providers.find(account.providerKey)
         AppLogger.d(LOG, "resolveStreamUrl(): provider=${provider.key}, authType=${provider.authType}")
 
@@ -224,7 +232,7 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
             ProviderAuthType.OAUTH_GOOGLE   -> {
                 val token = gDriveRepo.freshToken(account)
                 AppLogger.d(LOG, "  Google Drive stream URL built (has token=${token?.isNotBlank()})")
-                "https://www.googleapis.com/drive/v3/files/${asset.publicId}?alt=media"
+                run { val fileId = asset.assetId.removePrefix("gdrive:"); "https://www.googleapis.com/drive/v3/files/$fileId?alt=media" }
             }
             ProviderAuthType.OAUTH_DROPBOX  -> {
                 AppLogger.d(LOG, "  Dropbox: fetching fresh temp link for: ${asset.publicId.take(60)}")
@@ -316,7 +324,7 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
                 prevPlayer?.release()
             }
             // Create OkHttp-backed player if headers needed, otherwise default
-            val app = getApplication<android.app.Application>()
+            val app = application
             val player = if (headers != null) {
                 val okClient = okhttp3.OkHttpClient.Builder()
                     .addInterceptor { chain ->

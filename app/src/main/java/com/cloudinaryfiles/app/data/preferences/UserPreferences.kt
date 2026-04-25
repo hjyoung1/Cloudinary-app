@@ -77,6 +77,7 @@ class UserPreferences(private val context: Context) {
         private val KEY_APP_ONEDRIVE_CLIENT_ID   = stringPreferencesKey("app_onedrive_client_id")
         private val KEY_APP_BOX_CLIENT_ID        = stringPreferencesKey("app_box_client_id")
         private val KEY_APP_BOX_CLIENT_SECRET    = stringPreferencesKey("app_box_client_secret")
+        private val KEY_THEME                    = stringPreferencesKey("app_theme_id")
 
         private val gson = Gson()
         private val listType = object : TypeToken<List<NamedAccount>>() {}.type
@@ -112,6 +113,10 @@ class UserPreferences(private val context: Context) {
     val credentials: Flow<CloudinaryCredentials?> = activeAccount.map { it?.toCredentials() }
 
     // ── App OAuth Settings ────────────────────────────────────────────────────
+
+    val selectedThemeId: Flow<String> = context.dataStore.data.map { it[KEY_THEME] ?: "" }
+
+    suspend fun saveTheme(themeId: String) { context.dataStore.edit { it[KEY_THEME] = themeId } }
 
     val appOAuthSettings: Flow<AppOAuthSettings> = context.dataStore.data.map { prefs ->
         AppOAuthSettings(

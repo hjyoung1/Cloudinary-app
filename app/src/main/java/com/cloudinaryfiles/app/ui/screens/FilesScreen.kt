@@ -8,7 +8,6 @@ import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
-import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -49,8 +48,12 @@ import androidx.compose.ui.text.font.FontFamily
 import kotlinx.coroutines.launch
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.ui.draw.scale
 import com.cloudinaryfiles.app.data.preferences.UserPreferences
+import com.cloudinaryfiles.app.data.preferences.AppOAuthSettings
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,10 +83,8 @@ fun FilesScreen(
         activeAccount?.providerKey?.let { Providers.find(it) }
     }
     val isAudioPlaying = state.currentlyPlayingId != null
-    var showAppSettings by remember { mutableStateOf(false) }
     var actionSheetAsset by remember { mutableStateOf<com.cloudinaryfiles.app.data.model.CloudinaryAsset?>(null) }
     var showFolderFilter by remember { mutableStateOf(false) }
-    val appPrefs = remember { UserPreferences(context) }
 
     // Handle back: dismiss viewer → clear selection → then default (exit app)
     BackHandler(enabled = state.viewingAsset != null || state.isSelectionMode) {
@@ -285,7 +286,8 @@ fun FilesScreen(
                     selected = false,
                     onClick = {
                         scope.launch { drawerState.close() }
-                        showAppSettings = true
+
+                        onNavigateToSettings()
                     },
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
                 )
@@ -590,14 +592,6 @@ fun FilesScreen(
                 vm.toggleSelection(asset.assetId)
                 vm.deleteSelectedAssets()
             }
-        )
-    }
-
-    // App Settings dialog
-    if (showAppSettings) {
-        AppSettingsDialog(
-            prefs = appPrefs,
-            onDismiss = { showAppSettings = false }
         )
     }
 
@@ -1032,212 +1026,6 @@ private fun exportLogs(context: android.content.Context) {
     context.startActivity(Intent.createChooser(intent, "Export logs via…"))
 }
 
-// ── App Settings Dialog ───────────────────────────────────────────────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun AppSettingsDialog(
-    prefs: com.cloudinaryfiles.app.data.preferences.UserPreferences,
-    onDismiss: () -> Unit
-) {
-    val scope = rememberCoroutineScope()
-    val current by prefs.appOAuthSettings.collectAsStateWithLifecycle(
-        initialValue = com.cloudinaryfiles.app.data.preferences.AppOAuthSettings()
-    )
-
-    var googleClientId     by remember(current) { mutableStateOf(current.googleClientId) }
-    var googleClientSecret by remember(current) { mutableStateOf(current.googleClientSecret) }
-    var dropboxKey         by remember(current) { mutableStateOf(current.dropboxAppKey) }
-    var dropboxSecret      by remember(current) { mutableStateOf(current.dropboxAppSecret) }
-    var onedriveClientId   by remember(current) { mutableStateOf(current.onedriveClientId) }
-    var boxClientId        by remember(current) { mutableStateOf(current.boxClientId) }
-    var boxClientSecret    by remember(current) { mutableStateOf(current.boxClientSecret) }
-
-    var showGoogleSecret  by remember { mutableStateOf(false) }
-    var showDropboxSecret by remember { mutableStateOf(false) }
-    var showBoxSecret     by remember { mutableStateOf(false) }
-
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = Color(0xFF0E0C1C),
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .navigationBarsPadding()
-                .padding(horizontal = 20.dp, bottom = 24.dp)
-        ) {
-            // Header
-            Row(verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(bottom = 4.dp)) {
-                Icon(Icons.Outlined.Tune, null, tint = Color(0xFFA29BFE), modifier = Modifier.size(22.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("App Settings", style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold, color = Color.White)
-            }
-            Text("OAuth credentials entered here are shared across all accounts of that type. " +
-                 "You won't need to enter them again when adding new accounts.",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.White.copy(0.55f),
-                modifier = Modifier.padding(bottom = 20.dp))
-
-            // ── Google Drive ────────────────────────────────────────────────
-            SettingsProviderSection(emoji = "🔵", title = "Google Drive") {
-                SettingsTextField(
-                    value = googleClientId, onValueChange = { googleClientId = it },
-                    label = "Client ID", hint = "xxxx.apps.googleusercontent.com"
-                )
-                Spacer(Modifier.height(8.dp))
-                SettingsTextField(
-                    value = googleClientSecret, onValueChange = { googleClientSecret = it },
-                    label = "Client Secret", isPassword = true,
-                    showPassword = showGoogleSecret, onTogglePassword = { showGoogleSecret = !showGoogleSecret }
-                )
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            // ── Dropbox ─────────────────────────────────────────────────────
-            SettingsProviderSection(emoji = "📦", title = "Dropbox") {
-                SettingsTextField(
-                    value = dropboxKey, onValueChange = { dropboxKey = it },
-                    label = "App Key"
-                )
-                Spacer(Modifier.height(8.dp))
-                SettingsTextField(
-                    value = dropboxSecret, onValueChange = { dropboxSecret = it },
-                    label = "App Secret", isPassword = true,
-                    showPassword = showDropboxSecret, onTogglePassword = { showDropboxSecret = !showDropboxSecret }
-                )
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            // ── OneDrive ────────────────────────────────────────────────────
-            SettingsProviderSection(emoji = "🟦", title = "OneDrive / Microsoft") {
-                SettingsTextField(
-                    value = onedriveClientId, onValueChange = { onedriveClientId = it },
-                    label = "Client ID (Application ID)"
-                )
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            // ── Box ─────────────────────────────────────────────────────────
-            SettingsProviderSection(emoji = "📫", title = "Box") {
-                SettingsTextField(
-                    value = boxClientId, onValueChange = { boxClientId = it },
-                    label = "Client ID"
-                )
-                Spacer(Modifier.height(8.dp))
-                SettingsTextField(
-                    value = boxClientSecret, onValueChange = { boxClientSecret = it },
-                    label = "Client Secret", isPassword = true,
-                    showPassword = showBoxSecret, onTogglePassword = { showBoxSecret = !showBoxSecret }
-                )
-            }
-
-            Spacer(Modifier.height(24.dp))
-
-            // Save button
-            Button(
-                onClick = {
-                    scope.launch {
-                        prefs.saveAppOAuthSettings(
-                            com.cloudinaryfiles.app.data.preferences.AppOAuthSettings(
-                                googleClientId     = googleClientId.trim(),
-                                googleClientSecret = googleClientSecret.trim(),
-                                dropboxAppKey      = dropboxKey.trim(),
-                                dropboxAppSecret   = dropboxSecret.trim(),
-                                onedriveClientId   = onedriveClientId.trim(),
-                                boxClientId        = boxClientId.trim(),
-                                boxClientSecret    = boxClientSecret.trim()
-                            )
-                        )
-                        onDismiss()
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp)
-            ) {
-                Icon(Icons.Filled.Save, null)
-                Spacer(Modifier.width(8.dp))
-                Text("Save App Settings", fontWeight = FontWeight.SemiBold)
-            }
-        }
-    }
-}
-
-@Composable
-private fun SettingsProviderSection(
-    emoji: String,
-    title: String,
-    content: @Composable ColumnScope.() -> Unit
-) {
-    Surface(
-        color = Color.White.copy(0.05f),
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(bottom = 10.dp)) {
-                Text(emoji, fontSize = 18.sp)
-                Spacer(Modifier.width(8.dp))
-                Text(title, style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold, color = Color.White)
-            }
-            content()
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SettingsTextField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    label: String,
-    hint: String = "",
-    isPassword: Boolean = false,
-    showPassword: Boolean = false,
-    onTogglePassword: (() -> Unit)? = null
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        label = { Text(label, fontSize = 12.sp) },
-        placeholder = if (hint.isNotEmpty()) { { Text(hint, fontSize = 11.sp, color = Color.White.copy(0.3f)) } } else null,
-        singleLine = true,
-        visualTransformation = if (isPassword && !showPassword)
-            androidx.compose.ui.text.input.PasswordVisualTransformation() else
-            androidx.compose.ui.text.input.VisualTransformation.None,
-        trailingIcon = if (isPassword && onTogglePassword != null) {
-            {
-                IconButton(onClick = onTogglePassword, modifier = Modifier.size(36.dp)) {
-                    Icon(
-                        if (showPassword) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
-                        null, tint = Color.White.copy(0.5f), modifier = Modifier.size(18.dp)
-                    )
-                }
-            }
-        } else null,
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedTextColor = Color.White,
-            unfocusedTextColor = Color.White.copy(0.85f),
-            focusedLabelColor = Color(0xFFA29BFE),
-            unfocusedLabelColor = Color.White.copy(0.5f),
-            focusedBorderColor = Color(0xFFA29BFE),
-            unfocusedBorderColor = Color.White.copy(0.2f),
-            cursorColor = Color(0xFFA29BFE)
-        ),
-        modifier = Modifier.fillMaxWidth(),
-        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-            imeAction = androidx.compose.ui.text.input.ImeAction.Next
-        )
-    )
-}
 
 // ── Long-press File Action Sheet ──────────────────────────────────────────────
 

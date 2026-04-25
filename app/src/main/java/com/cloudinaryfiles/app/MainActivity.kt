@@ -90,9 +90,20 @@ class MainActivity : ComponentActivity() {
                                 onEditAccount = { accountId ->
                                     AppLogger.i(LOG_TAG, "files → edit_account/$accountId")
                                     navController.navigate("edit_account/$accountId")
+                                },
+                                onNavigateToSettings = {
+                                    AppLogger.i(LOG_TAG, "files → app_settings")
+                                    navController.navigate("app_settings")
                                 }
                             )
                         }
+                        composable("app_settings") {
+                            AppLogger.d(LOG_TAG, "Composing 'app_settings'")
+                            com.cloudinaryfiles.app.ui.screens.AppSettingsScreen(
+                                onBack = { navController.popBackStack() }
+                            )
+                        }
+
                         composable("edit_account/{accountId}") { backStackEntry ->
                             val accountId = backStackEntry.arguments?.getString("accountId") ?: ""
                             AppLogger.d(LOG_TAG, "Composing 'edit_account' for $accountId")
